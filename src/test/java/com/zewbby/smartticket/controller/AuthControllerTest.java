@@ -28,6 +28,7 @@ import java.time.LocalDateTime;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -59,7 +60,7 @@ class AuthControllerTest {
         mockMvc = MockMvcBuilders
                 .standaloneSetup(new AuthController(authService), new UserController(userService))
                 .addMappedInterceptors(
-                        new String[]{"/api/users/me"},
+                        new String[]{"/api/users/**"},
                         new JwtAuthenticationInterceptor(jwtTokenProvider, tokenBlacklistService)
                 )
                 .setControllerAdvice(new GlobalExceptionHandler())
@@ -175,6 +176,26 @@ class AuthControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(401))
                 .andExpect(jsonPath("$.message").value("请先登录"));
+    }
+
+    @Test
+    void userProfileByIdIsNotExposed() throws Exception {
+        mockMvc.perform(get("/api/users/2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(500));
+
+        verifyNoInteractions(userService);
+    }
+
+    @Test
+    void legacyUserCreationEndpointIsNotExposed() throws Exception {
+        mockMvc.perform(post("/api/users")
+                        .contentType("application/json")
+                        .content("{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(500));
+
+        verifyNoInteractions(userService);
     }
 
     private UserAccount user() {
