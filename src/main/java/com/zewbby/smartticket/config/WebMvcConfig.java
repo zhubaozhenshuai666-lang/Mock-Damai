@@ -41,6 +41,7 @@ public class WebMvcConfig implements WebMvcConfigurer {
                         "/api/order-requests/**",
                         "/api/payments/**",
                         "/api/auth/logout",
+                        "/api/users/**",
                         "/api/users/me",
                         "/api/users/me/orders",
                         "/api/users/*/orders",
