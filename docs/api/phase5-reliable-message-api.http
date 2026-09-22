@@ -90,14 +90,11 @@ Authorization: Bearer {{token}}
 # FROM ticket_stock
 # WHERE ticket_category_id = 2;
 
-### 12. RabbitMQ 管理台验证
-# 打开 http://localhost:15672
-# 账号密码以你的本地 RabbitMQ 配置为准
-# 查看：
-# - Queues -> order.async.queue
-# - Queues -> order.async.dlq
-# - Exchanges -> order.async.exchange
-# - Exchanges -> order.async.dlx.exchange
+### 12. RocketMQ 消息验证
+# 使用 RocketMQ Dashboard 或 mqadmin 连接 SMART_TICKET_ROCKETMQ_NAME_SERVER（默认 localhost:9876）
+# 查看 Topic：smart-ticket.async-order.create、smart-ticket.order.timeout
+# 查看 Consumer Group：smart-ticket-async-order-create、smart-ticket-order-timeout
+# 异步创单失败消息查看对应的重试队列和死信队列。
 
 ### 13. 查询本地消息
 GET {{host}}/api/admin/local-messages?limit=20

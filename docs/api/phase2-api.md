@@ -123,7 +123,7 @@
 - 请求头：`Authorization: Bearer <token>`
 - 请求参数：`showId`、`sessionId`、`ticketCategoryId`、`quantity`、`idempotencyToken`
 - 正常场景：返回 `requestId`，后续通过 `/api/order-requests/{requestId}` 查询订单创建结果
-- 主链路：限流、soldout 快速失败、Redis 预扣、`ticket_order_request`、`local_message`、RabbitMQ、消费者创建订单
+- 主链路：限流、soldout 快速失败、Redis 预扣、RocketMQ 事务消息、消费者创建订单
 
 ### 查询订单
 
@@ -209,7 +209,7 @@
 
 ## 自动超时关闭
 
-超时关闭没有对外 Controller 接口。创建订单后消息进入 RabbitMQ TTL 队列；TTL 以 `OrderConstant.ORDER_TIMEOUT_TTL_MILLIS` 为准，到期后由死信消费者调用关闭逻辑，定时任务每分钟兜底扫描。
+超时关闭没有对外 Controller 接口。创建订单后发送 RocketMQ 延迟消息；延迟级别由 `smart-ticket.order-timeout.rocket-mq-delay-level` 控制，到期后由消费者调用关闭逻辑，定时任务继续作为兜底扫描。
 
 ```json
 {"code":200,"message":"success","data":{"id":32,"status":"CLOSED","closeTime":"2026-05-27T18:05:00","cancelReason":"订单超时未支付关闭"}}

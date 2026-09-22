@@ -12,15 +12,15 @@
   -> 可选等待室入场 token
   -> 提交异步下单
   -> 多维限流 + 防重复提交 + soldout 快速失败
-  -> Redis Lua 原子预扣库存
-  -> ticket_order_request 记录请求状态
-  -> local_message Outbox 记录待发送消息
-  -> 定时任务投递 RabbitMQ
-  -> RabbitMQ 消费者创建正式订单
+  -> RocketMQ 事务消息（本地事务执行 Redis 预扣和事务标记）
+  -> 按配置写 ticket_order_request 请求状态
+  -> RocketMQ 顺序消费者创建正式订单
   -> 用户查询 requestId 得到订单结果
   -> 创建支付单并模拟支付回调
   -> 支付成功确认库存，超时/取消释放库存
 ```
+
+`local_message` Outbox 和 Kafka 用于可选的可靠投递路径（领域事件或兼容模式命令），默认交易命令不走该路径，不能与 RocketMQ 交易链路混为一谈。
 
 最重要的阅读原则：不要从所有 controller 一口气看起。先看下单主链路，再看可靠消息和补偿，最后看后台、库存治理、观测指标。
 
@@ -33,14 +33,17 @@
 1. `README.md`
 2. `src/main/resources/application.yml`
 3. `src/main/java/com/zewbby/smartticket/constant/RedisKeyConstant.java`
-4. `src/main/java/com/zewbby/smartticket/constant/RabbitMqConstant.java`
+4. `src/main/java/com/zewbby/smartticket/config/AsyncOrderSubmitProperties.java`
+5. `src/main/java/com/zewbby/smartticket/config/OrderTimeoutProperties.java`
+6. `src/main/java/com/zewbby/smartticket/config/MqConsumerProperties.java`
 
 你要理解：
 
-- 服务端口、profile、MySQL、Redis、RabbitMQ、Actuator 暴露范围。
+- 服务端口、profile、MySQL、Redis、RocketMQ、Kafka、Actuator 暴露范围。
 - `smart-ticket.*` 下的业务配置：限流、Outbox、MQ 消费者、库存分桶、等待室、支付签名。
 - Redis key 的命名边界：库存、幂等 token、等待室 token、限流、soldout、预扣记录。
-- RabbitMQ exchange、queue、routing key 的命名，尤其异步下单队列分片。
+- RocketMQ topic、consumer group、延迟级别，以及按票档/库存桶路由的业务键。
+- Kafka topic 和 consumer group 仅服务于 Outbox/领域事件时的分区消费。
 
 读完这一组，你应该知道系统依赖什么中间件，以及每类业务状态大概落在哪里。
 
@@ -104,10 +107,10 @@
 8. 如果开启等待室，消费一次性 `admissionToken`。
 9. 消费一次性幂等 token。
 10. 生成稳定 `requestId`。
-11. Redis Lua 原子预扣库存。
-12. 创建 `ticket_order_request`，首次入库就是 `QUEUED`。
-13. 创建 `ASYNC_CREATE_ORDER` 本地消息，写入 `local_message`。
-14. 事务提交后触发消息投递任务。
+11. 生成 RocketMQ 事务消息上下文。
+12. RocketMQ 本地事务中执行 Redis Lua 原子预扣库存并写事务标记。
+13. 按配置写入 `ticket_order_request`；RocketMQ 默认关闭入口预落库时，由消费者补建请求记录。
+14. 事务提交后 RocketMQ 消息对消费者可见；Outbox 模式才会写 `local_message` 并由 Kafka 投递。
 15. 返回 `requestId` 给用户。
 
 这一段体现了项目的核心思想：接口线程不创建正式订单，只拿资格、预扣 Redis、写请求状态和可靠消息。
@@ -193,7 +196,7 @@
 5. `src/main/java/com/zewbby/smartticket/domain/entity/LocalMessage.java`
 6. `src/main/java/com/zewbby/smartticket/enums/LocalMessageStatusEnum.java`
 7. `src/main/java/com/zewbby/smartticket/task/LocalMessagePublishTask.java`
-8. `src/main/java/com/zewbby/smartticket/mq/RabbitPublisherCallbackHandler.java`
+8. `src/main/java/com/zewbby/smartticket/config/KafkaAsyncOrderConfig.java`
 
 你要理解 Outbox 的可靠性模型：
 
@@ -201,30 +204,30 @@
 2. 事务提交后触发发送。
 3. 定时任务扫描 `INIT`、`FAILED` 等可发送消息。
 4. 发送前通过条件更新抢占 `SENDING`，防止多实例重复发。
-5. RabbitTemplate 发送后进入 `SENT`。
-6. Publisher Confirm 成功后进入确认状态。
+5. `KafkaTemplate` 发送后进入 `SENT`。
+6. Kafka Broker 确认成功后进入确认状态。
 7. 失败、Return、Confirm 超时会进入重试或 DEAD。
 
-这部分解决的是“数据库事务成功但 MQ 发送失败”的一致性问题。代价是多了一张消息表和额外 DB 写入，所以它可靠但不是百万级主事件日志的终局形态。
+这部分解决的是“数据库事务成功但消息发送失败”的一致性问题。代价是多了一张消息表和额外 DB 写入，所以它适合领域事件和兼容模式，不应替代默认的 RocketMQ 交易命令链路。
 
-### 第 8 步：看 RabbitMQ 配置和分片消费
+### 第 8 步：看 RocketMQ 交易命令和 Kafka 事件流
 
 先读：
 
-1. `src/main/java/com/zewbby/smartticket/config/RabbitMqConfig.java`
-2. `src/main/java/com/zewbby/smartticket/config/MqConsumerProperties.java`
-3. `src/main/java/com/zewbby/smartticket/constant/RabbitMqConstant.java`
-4. `src/main/java/com/zewbby/smartticket/mq/AsyncCreateOrderConsumer.java`
-5. `src/main/java/com/zewbby/smartticket/mq/DeadLetterMessageRecoverer.java`
-6. `src/main/java/com/zewbby/smartticket/service/impl/DeadLetterMessageServiceImpl.java`
+1. `src/main/java/com/zewbby/smartticket/service/impl/RocketMqAsyncOrderMessagePublisher.java`
+2. `src/main/java/com/zewbby/smartticket/mq/RocketMqAsyncCreateOrderConsumer.java`
+3. `src/main/java/com/zewbby/smartticket/mq/RocketMqOrderTimeoutConsumer.java`
+4. `src/main/java/com/zewbby/smartticket/mq/RocketMqPaymentCompensationConsumer.java`
+5. `src/main/java/com/zewbby/smartticket/config/KafkaAsyncOrderConfig.java`
+6. `src/main/java/com/zewbby/smartticket/task/LocalMessagePublishTask.java`
 
 重点：
 
-- 默认异步下单队列分片数为 16。
-- `LocalMessageServiceImpl` 会按 `ticketCategoryId` 路由到不同 shard routing key。
-- `AsyncCreateOrderConsumer` 监听 `orderAsyncQueueNames`，可同时消费多个分片队列。
-- 消费者本地有限重试，重试耗尽后写 `dead_letter_message`，而不是无限重回队列。
-- RabbitMQ 仍是业务可靠消息组件，不是百万级活动事件日志组件；大活动主链路建议 Kafka/RocketMQ。
+- 默认异步下单使用 RocketMQ 事务消息，消费者使用集群顺序消费和有限重试。
+- RocketMQ 普通发送使用活动、票档和库存桶组成的业务键，保证同一局部键的处理顺序。
+- 订单超时使用 RocketMQ 延迟消息，定时扫描任务只负责兜底。
+- 支付补偿也使用 RocketMQ 顺序消息，重试耗尽后写 `dead_letter_message`。
+- Kafka 只承载 Outbox/领域事件或兼容模式命令；同一条交易命令不能同时写 Kafka 和 RocketMQ。
 
 ### 第 9 步：看消费者如何创建正式订单
 
@@ -366,18 +369,17 @@ sequenceDiagram
     participant O as OrderServiceImpl
     participant R as Redis Lua
     participant DB as MySQL
-    participant L as local_message
-    participant MQ as RabbitMQ
-    participant CON as AsyncCreateOrderConsumer
+    participant MQ as RocketMQ
+    participant CON as RocketMqAsyncCreateOrderConsumer
 
     U->>C: POST /api/orders/async
     C->>O: submitAsyncOrder
     O->>O: 限流/防重/归属校验/token 校验
-    O->>R: Redis 预扣库存
-    R-->>O: SUCCESS
-    O->>DB: insert ticket_order_request(QUEUED)
-    O->>L: insert local_message(ASYNC_CREATE_ORDER)
-    L->>MQ: 事务提交后投递
+    O->>MQ: 发送半消息
+    MQ->>O: 执行本地事务
+    O->>R: Redis 预扣和事务标记
+    O->>DB: 按配置写 ticket_order_request(QUEUED)
+    MQ-->>O: 事务提交后可见
     MQ->>CON: 消费异步创单消息
     CON->>DB: 条件扣 MySQL 库存
     CON->>DB: insert ticket_order(PENDING_PAYMENT)
@@ -395,7 +397,7 @@ POST /api/orders/async
   -> 直接抛业务异常
   -> 不创建 ticket_order_request
   -> 不写 local_message
-  -> 不进入 RabbitMQ
+  -> 不进入 RocketMQ
 ```
 
 这个流程非常重要，因为它避免了无库存请求继续打 MySQL。
@@ -418,8 +420,8 @@ AsyncCreateOrderConsumer 收到消息
 
 ```text
 订单创建成功 PENDING_PAYMENT
-  -> 写订单超时关闭本地消息
-  -> RabbitMQ 延迟/死信或定时扫描触发 closeTimeoutOrder
+  -> 事务提交后发送 RocketMQ 延迟消息
+  -> 定时扫描作为兜底触发 closeTimeoutOrder
   -> 如果订单仍是 PENDING_PAYMENT
   -> 更新为 CLOSED
   -> 释放 MySQL locked_stock
@@ -495,7 +497,7 @@ AsyncCreateOrderConsumer 收到消息
 ## 当前系统仍要清醒认识的限制
 
 1. `local_message` 仍然是数据库写放大，可靠但不适合百万级主事件日志峰值。
-2. RabbitMQ 分片能缓解单队列瓶颈，但不能替代 Kafka/RocketMQ 这类高吞吐日志系统。
+2. RocketMQ 交易命令与 Kafka 事件流仍需要分别做容量规划、监控和故障演练。
 3. 等待室现在只是入场资格开关，还不是完整活动隔离体系。
 4. 活动级独立 Redis keyspace、MQ topic、消费者组、数据库分区还没有完全落地。
 5. 压测时必须区分“token 预取吞吐”和“下单提交吞吐”，不能混在一起看。
@@ -511,8 +513,8 @@ AsyncCreateOrderConsumer 收到消息
 | 是否点名具体文件 | 通过，覆盖 controller、service、mapper、lua、config、task、mq |
 | 是否覆盖正常链路 | 通过，包含异步抢票成功流程 |
 | 是否覆盖失败和补偿链路 | 通过，包含 Redis 预扣失败、消费者失败补偿、超时关闭 |
-| 是否解释关键技术 | 通过，解释 JWT、限流、幂等、等待室、Redis Lua、Outbox、RabbitMQ、支付签名 |
-| 是否指出当前限制 | 通过，单独列出数据库写放大、RabbitMQ 上限、活动隔离不足 |
+| 是否解释关键技术 | 通过，解释 JWT、限流、幂等、等待室、Redis Lua、Outbox、RocketMQ、Kafka、支付签名 |
+| 是否指出当前限制 | 通过，单独列出数据库写放大、双 MQ 运维成本、活动隔离不足 |
 | 是否适合新读者 | 通过，提供 30 分钟最短阅读路径 |
 
 ## 最短阅读路径
@@ -524,8 +526,8 @@ AsyncCreateOrderConsumer 收到消息
 3. `StockLuaService` 和库存 Lua
 4. `LocalMessageServiceImpl`
 5. `LocalMessagePublishTask`
-6. `RabbitMqConfig`
-7. `AsyncCreateOrderConsumer`
+6. `RocketMqAsyncOrderMessagePublisher`
+7. `RocketMqAsyncCreateOrderConsumer`
 8. `PaymentServiceImpl`
 9. `OrderServiceImpl.closeTimeoutOrder`
 
@@ -533,4 +535,4 @@ AsyncCreateOrderConsumer 收到消息
 
 ## 一句话总览
 
-SmartTicket Lite 的核心不是“下单接口直接扣库”，而是“入口限流和 Redis 预扣拿资格，Outbox 可靠投递异步创单消息，消费者最终扣 MySQL 并创建订单，支付和超时关闭完成库存闭环，后台治理负责异常补偿”。
+SmartTicket Lite 的核心不是“下单接口直接扣库”，而是“入口限流和 Redis 预扣拿资格，RocketMQ 事务消息驱动异步创单，消费者最终扣 MySQL 并创建订单，支付和超时关闭完成库存闭环；Kafka 只负责可选领域事件，后台治理负责异常补偿”。

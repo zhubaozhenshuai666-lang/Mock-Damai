@@ -49,11 +49,11 @@ GET {{baseUrl}}/api/order-requests/REQ替换为你的requestId
 ### WHERE ticket_category_id = 2;
 
 
-### RabbitMQ 管理台验证
-### 地址：http://localhost:15672
-### 账号密码以你的本地 RabbitMQ 配置为准
-### 查看 Queues and Streams -> order.async.queue
-### 消费者正常工作时，提交后 Ready 消息数应很快回到 0。
+### RocketMQ 消费验证
+### 使用 RocketMQ Dashboard 或 mqadmin 连接 SMART_TICKET_ROCKETMQ_NAME_SERVER（默认 localhost:9876）
+### 查看 Topic：smart-ticket.async-order.create
+### 查看 Consumer Group：smart-ticket-async-order-create
+### 消费者正常工作时，提交后堆积量应很快回到 0。
 ###
 ### 如果处理失败且消息被拒绝进入失败队列，可查看：
-### Queues and Streams -> order.async.dlq
+### RocketMQ 重试队列和死信队列（%RETRY%smart-ticket-async-order-create、%DLQ%smart-ticket-async-order-create）

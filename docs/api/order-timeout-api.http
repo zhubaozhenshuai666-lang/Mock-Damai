@@ -30,7 +30,7 @@ GET {{baseUrl}}/api/orders/{{timeoutOrderId}}
 
 
 ### 3. 等待至少 70 秒，不要支付和取消，再查询订单
-### RabbitMQ TTL 死信消费或每分钟兜底扫描完成后，status 应为 CLOSED，closeTime 应有值。
+### RocketMQ 延迟消息或定时扫描兜底完成后，status 应为 CLOSED，closeTime 应有值。
 GET {{baseUrl}}/api/orders/{{timeoutOrderId}}
 
 

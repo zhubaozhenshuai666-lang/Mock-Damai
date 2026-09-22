@@ -133,12 +133,12 @@ POST {{baseUrl}}/api/orders/{{cancelOrderId}}/cancel
 POST {{baseUrl}}/api/orders/{{cancelOrderId}}/cancel
 
 
-### 17. 创建第三笔订单：用于 RabbitMQ 超时自动关闭
+### 17. 创建第三笔订单：用于 RocketMQ 延迟消息自动关闭
 ### 先获取 token，并将响应 data.token 填入 @timeoutToken。
 GET {{baseUrl}}/api/orders/idempotency-token
 
 
-### 17B. [已废弃] 创建第三笔同步订单：用于 RabbitMQ 超时自动关闭调试
+### 17B. [已废弃] 创建第三笔同步订单：用于 RocketMQ 超时自动关闭调试
 ### 执行后将响应 data.id 填入 @timeoutOrderId；不要支付或取消。
 POST {{baseUrl}}/api/orders
 Content-Type: application/json

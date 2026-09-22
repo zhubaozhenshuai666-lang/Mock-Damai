@@ -24,7 +24,7 @@ GET {{host}}/api/admin/dead-letters/{{deadLetterId}}
 Authorization: Bearer {{token}}
 
 ### 5. 人工重试死信
-# retry 不会直接发送 RabbitMQ，而是重新写 local_message(INIT)，由可靠消息发送器统一投递。
+# retry 会重新调用当前交易消息发布器；默认发布器是 RocketMQ，接口只负责触发重试并更新死信状态。
 POST {{host}}/api/admin/dead-letters/{{deadLetterId}}/retry
 Authorization: Bearer {{token}}
 
