@@ -147,7 +147,7 @@
 
 1. `src/main/java/com/zewbby/smartticket/service/StockLuaService.java`
 2. `src/main/resources/lua/stock_pre_deduct.lua`
-3. `src/main/resources/lua/stock_pre_deduct_bucket.lua`
+3. `src/main/resources/lua/stock_bucket_pre_deduct.lua`
 4. `src/main/resources/lua/stock_rollback.lua`
 5. `src/main/java/com/zewbby/smartticket/service/BucketRouteService.java`
 6. `src/main/java/com/zewbby/smartticket/config/StockBucketProperties.java`
@@ -454,22 +454,17 @@ AsyncCreateOrderConsumer 收到消息
 
 ## HTTP 调试文件阅读顺序
 
-建议按这个顺序看 `docs/api`：
+接口样例的完整分类见 [`docs/api/README.md`](../api/README.md)。建议先按当前链路阅读：
 
 1. `docs/api/phase1-auth-api.http`
 2. `docs/api/show.http`
-3. `docs/api/phase4-idempotency-token-api.http`
-4. `docs/api/async-order-submit-api.http`
-5. `docs/api/async-order-result-api.http`
-6. `docs/api/phase3-async-order-full-flow.http`
-7. `docs/api/phase5-redis-stock-api.http`
-8. `docs/api/phase5-reliable-message-api.http`
-9. `docs/api/phase2-consumer-dlq-api.http`
-10. `docs/api/phase1-payment-api.http`
-11. `docs/api/order-timeout-api.http`
-12. `docs/api/phase2-stock-consistency-api.http`
+3. `docs/api/async-order-submit-api.http`
+4. `docs/api/phase5-redis-stock-api.http`
+5. `docs/api/phase2-stock-consistency-api.http`
+6. `docs/api/phase5-reliable-message-api.http`
+7. `docs/api/phase2-consumer-dlq-api.http`
 
-如果你只想先跑通主链路，读 1 到 6 就够了。
+标记为历史兼容的 `phase*` 和 `order*` 样例（包括旧的异步结果/消费者示例）只用于旧接口回归，不要当作主链路入口。
 
 ## 读代码时的检查问题
 

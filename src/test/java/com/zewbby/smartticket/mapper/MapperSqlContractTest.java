@@ -265,7 +265,7 @@ class MapperSqlContractTest {
     void documentationMarksSyncOrderDeprecatedAndJmeterGuideUsesAsyncOnly() throws Exception {
         String readme = Files.readString(Path.of("README.md"));
         String jmeterGuide = Files.readString(Path.of("docs/performance/async-order-jmeter-load-test-guide.md"));
-        String pressureTemplate = Files.readString(Path.of("docs/phase2-pressure-test-report.md"));
+        String pressureTemplate = Files.readString(Path.of("docs/performance/phase2-pressure-test-report.md"));
 
         assertThat(readme).contains("高并发购票主链路只走异步下单");
         assertThat(readme).contains("`POST /api/orders`").contains("已废弃");

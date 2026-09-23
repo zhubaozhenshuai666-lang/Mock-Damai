@@ -1,6 +1,6 @@
 @baseUrl = http://localhost:8081
 @ticketCategoryId = 2
-@adminPhone = 13800000001
+@adminPhone = 13800000002
 @adminPassword = 替换为本地admin密码
 
 ### 1. 登录 admin，获取后台 token

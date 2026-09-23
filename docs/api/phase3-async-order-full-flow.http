@@ -19,7 +19,7 @@
 ### 2. 如果数据库中的 id 不同，请修改上方变量。
 ### 3. 异步下单先返回 requestId，不会直接返回 orderId。
 ### 4. 查询结果为 SUCCESS 后，把 data.orderId 填到对应 @xxxOrderId。
-### 5. 当前没有独立库存接口；库存精确验证请执行 docs/sql/phase3-async-order-check.sql。
+### 5. 当前没有独立库存接口；库存精确验证请执行本文件末尾的 MySQL 检查 SQL。
 ### 6. 票档接口可能命中 Redis 缓存；观察库存前可执行：
 ###    redis-cli DEL 'show:detail:1' 'show:sessions:1' 'session:ticket-categories:1'
 ### 7. 订单超时关闭时间以 OrderConstant.ORDER_TIMEOUT_TTL_MILLIS 和 expire_time 为准。
@@ -158,4 +158,17 @@ GET {{baseUrl}}/api/users/{{userId}}/orders
 
 
 ### MySQL 精确检查
-### 请执行 docs/sql/phase3-async-order-check.sql。
+### 将上方变量替换为实际值后，在 MySQL 中执行：
+### SELECT request_id, status, order_id, fail_reason, compensated, compensation_status
+### FROM ticket_order_request
+### WHERE request_id IN ('<paidRequestId>', '<cancelRequestId>', '<timeoutRequestId>')
+### ORDER BY id;
+###
+### SELECT id, order_no, status, total_amount, expire_time, pay_time, cancel_time, close_time
+### FROM ticket_order
+### WHERE id IN (<paidOrderId>, <cancelOrderId>, <timeoutOrderId>)
+### ORDER BY id;
+###
+### SELECT ticket_category_id, total_stock, available_stock, locked_stock, sold_stock
+### FROM ticket_stock
+### WHERE ticket_category_id = <ticketCategoryId>;

@@ -4,12 +4,14 @@
 @ticketCategoryId = 2
 @quantity = 1
 
+### 本样例包含本地消息表管理操作。默认 RocketMQ 模式下，异步创单由事务消息处理；只有切换至 Outbox 模式时，才应按本地消息投递流程检查创单消息。
+
 ### 0. 登录获取 token
 POST {{host}}/api/auth/login
 Content-Type: application/json
 
 {
-  "phone": "13800000001",
+  "phone": "13800000002",
   "password": "Test123456"
 }
 
@@ -50,7 +52,7 @@ Content-Type: application/json
 GET {{host}}/api/order-requests/{{requestId}}
 Authorization: Bearer {{token}}
 
-### 5. 等待本地消息发送任务和消费者处理后，再查结果
+### 5. 等待当前模式对应的消息消费者处理后，再查结果（Outbox 模式还需等待本地消息发送任务）
 GET {{host}}/api/order-requests/{{requestId}}
 Authorization: Bearer {{token}}
 

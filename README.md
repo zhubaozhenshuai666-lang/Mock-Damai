@@ -1,6 +1,6 @@
 # SmartTicket Lite
 
-面向演出票务场景的 Spring Boot 单体服务。项目的交易主链路为异步下单：入口完成资格校验和 Redis 库存预扣后返回 `requestId`，由消息消费者创建正式订单，再进入支付、取消和超时关闭流程。
+面向演出票务场景的 Spring Boot 单体服务。高并发购票主链路只走异步下单：入口完成资格校验和 Redis 库存预扣后返回 `requestId`，由消息消费者创建正式订单，再进入支付、取消和超时关闭流程。
 
 > 当前默认消息实现为 RocketMQ 事务消息。Kafka、Redis Stream 和 Outbox 均保留为可切换实现，不能与默认链路混为一谈。
 
@@ -176,9 +176,9 @@ curl http://127.0.0.1:8081/actuator/health
 mvn test
 ```
 
-项目包含单元测试、集成测试、Mapper SQL 契约测试和 JMeter 异步下单脚本。JMeter 脚本位于 `scripts/jmeter/`，运行及环境准备脚本位于 `scripts/load/`，正式压测计划见 [docs/performance/formal-jmeter-pressure-test-plan.md](docs/performance/formal-jmeter-pressure-test-plan.md)。
+项目包含单元测试、集成测试、Mapper SQL 契约测试和 JMeter 异步下单脚本。测试分类和依赖见 [src/test/README.md](src/test/README.md)。JMeter 脚本位于 `scripts/jmeter/`，运行及环境准备脚本位于 `scripts/load/`，正式压测计划见 [docs/performance/formal-jmeter-pressure-test-plan.md](docs/performance/formal-jmeter-pressure-test-plan.md)。完整文档入口见 [docs/README.md](docs/README.md)，接口样例分类见 [docs/api/README.md](docs/api/README.md)。
 
-仓库现有报告用于验证链路和记录本机测试，不代表生产环境容量；在未完成独立压测机、多实例应用、Redis/MySQL/Kafka 或 RocketMQ 集群验证前，不应将其表述为生产吞吐结论。
+本地压测报告由脚本生成到 `reports/`，用于验证链路和记录本机测试，不代表生产环境容量；在未完成独立压测机、多实例应用、Redis/MySQL/Kafka 或 RocketMQ 集群验证前，不应将其表述为生产吞吐结论。
 
 ## 目录说明
 
@@ -188,8 +188,12 @@ src/main/java/.../service      下单、库存、支付、缓存和治理服务
 src/main/java/.../mq           消息生产、消费、重试与批量调度
 src/main/resources/lua         Redis 库存、补偿、限流与幂等脚本
 src/main/resources/mapper      MyBatis SQL 映射
+docs/README.md                 文档总入口和保留规则
+docs/architecture              系统流程和领域设计
+docs/adr                       架构决策记录
 docs/sql                       建表、初始化数据和索引脚本
-docs/api                       HTTP 接口示例
+docs/api                       HTTP 接口示例（含当前/历史分类）
+docs/performance               JMeter 指南、计划和报告模板
 scripts/load                   压测数据和环境准备脚本
 ```
 
