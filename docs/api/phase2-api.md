@@ -1,38 +1,41 @@
 # SmartTicket Lite 第二阶段接口文档
 
+> 历史阶段说明，保留早期接口样例供对照。本文不保证所有请求可直接执行；当前可执行请求以 [API 调试索引](README.md) 的“当前链路”为准。
+
 基础地址：`http://localhost:8081`  
 统一响应：`{"code":200,"message":"success","data":...}`；业务异常通常返回 `code=400`。
 
 ## 用户接口
 
-### 查询用户
+### 查询当前用户
 
-- URL：`/api/users/{id}`
+- URL：`/api/users/me`
 - Method：`GET`
-- 请求参数：路径参数 `id`，用户 ID
+- 请求头：`Authorization: Bearer <token>`
+- 请求参数：无
 - 请求 JSON：无
-- 正常场景：测试前确认用户是否存在
-- 异常场景：用户不存在
+- 正常场景：只返回当前登录用户的资料
+- 异常场景：未登录或 token 无效
 
 ```json
-{"code":200,"message":"success","data":{"id":1,"username":"zewbby","phone":"13800000001"}}
+{"code":200,"message":"success","data":{"id":1,"username":"zewbby","phone":"13800000001","status":"NORMAL","roleCode":"USER"}}
 ```
 
-### 创建用户
+### 注册用户
 
-- URL：`/api/users`
+- URL：`/api/auth/register`
 - Method：`POST`
-- 请求参数：`username`、`phone`
+- 请求参数：`username`、`phone`、`password`
 - 请求 JSON：见下方
 - 正常场景：创建购票用户
-- 异常场景：用户名或手机号校验失败、手机号已存在
+- 异常场景：用户名、手机号或密码校验失败，或手机号已存在
 
 ```json
-{"username":"phase2tester","phone":"13900000001"}
+{"username":"phase2tester","phone":"13900000001","password":"Test123456"}
 ```
 
 ```json
-{"code":200,"message":"success","data":{"id":2,"username":"phase2tester","phone":"13900000001"}}
+{"code":200,"message":"success","data":{"id":2,"username":"phase2tester","phone":"13900000001","status":"NORMAL","roleCode":"USER"}}
 ```
 
 ## 演出查询接口
@@ -102,8 +105,8 @@
 - 请求头：`Authorization: Bearer <token>`
 - 请求参数：`showId`、`sessionId`、`ticketCategoryId`、`quantity`、`idempotencyToken`
 - 请求 JSON：见下方
-- 正常场景：本地调试创建待支付订单，锁定库存，并写入订单超时关闭 Outbox 消息
-- 异常场景：未登录、演出场次票档关系不匹配、票档/库存不存在、库存不足、并发重复提交、本地消息写入失败
+- 正常场景：本地调试创建待支付订单并锁定库存；默认超时关闭消息由 RocketMQ 发布
+- 异常场景：未登录、演出场次票档关系不匹配、票档/库存不存在、库存不足、并发重复提交或消息发布失败
 
 ```json
 {"showId":1,"sessionId":1,"ticketCategoryId":2,"quantity":1,"idempotencyToken":"token-from-/api/orders/idempotency-token"}
@@ -114,7 +117,7 @@
 ```
 
 创建成功时库存变化：`available_stock - quantity`，`locked_stock + quantity`。
-当前测试超时约为 `1` 分钟；支付或主动取消测试应在订单自动关闭前完成。
+当前 `OrderConstant.ORDER_TIMEOUT_MINUTES` 为 `10` 分钟；支付或主动取消测试应在订单自动关闭前完成。
 
 ### 高并发异步下单
 
@@ -178,16 +181,18 @@
 - URL：`/api/payments/mock-pay`
 - Method：`POST`
 - 请求头：`Authorization: Bearer <token>`
-- 请求参数：`paymentNo`、`success`
+- 请求参数：`paymentNo`、`success`、`timestamp`、`signature`，建议同时提供 `nonce` 防重放
 - 请求 JSON：见下方
 - 正常场景：当前登录用户自己的支付单支付成功，订单 `PENDING_PAYMENT -> PAID`
 - 异常场景：支付单不存在、不属于当前用户、支付单已关闭/失败、订单已取消/关闭
 
 ```json
-{"paymentNo":"PAY...","success":true}
+{"paymentNo":"PAY...","success":true,"timestamp":1770000000000,"nonce":"唯一随机值","signature":"按支付回调密钥计算的HMAC-SHA256十六进制签名"}
 ```
 
-支付成功时库存变化：`locked_stock - quantity`，`sold_stock + quantity`。重复成功回调幂等返回，不重复流转库存。
+请求时须把示例时间戳换成当前毫秒时间戳并重新计算签名。签名原文按 `paymentNo`、`success`、`timestamp`、`nonce` 顺序以换行符连接，密钥来自 `smart-ticket.payment.mock-callback-secret`；可执行示例见 [`phase1-payment-api.http`](phase1-payment-api.http)。
+
+支付成功时库存变化：`locked_stock - quantity`，`sold_stock + quantity`。再次回调须使用新的 `nonce` 和对应签名；订单已支付时不会重复流转库存，复用旧 `nonce` 会被防重放校验拒绝。
 
 旧接口 `/api/orders/{id}/pay` 已废弃，会提示“请先创建支付单后再支付”，不能绕过 `payment_order` 直接修改订单。
 

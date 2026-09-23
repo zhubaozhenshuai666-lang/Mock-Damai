@@ -450,7 +450,7 @@ AsyncCreateOrderConsumer 收到消息
 - `src/main/java/com/zewbby/smartticket/mapper`
 - `src/main/resources/mapper`
 
-如果本地存在 `docs/sql/schema.sql`，建议最后再看 SQL 建表；如果该文件缺失，就先以 entity 和 mapper XML 为准。
+最后再看 [`docs/sql/schema.sql`](../sql/schema.sql) 中的建表定义，并与 entity 和 mapper XML 对照。
 
 ## HTTP 调试文件阅读顺序
 
@@ -464,7 +464,7 @@ AsyncCreateOrderConsumer 收到消息
 6. `docs/api/phase5-reliable-message-api.http`
 7. `docs/api/phase2-consumer-dlq-api.http`
 
-标记为历史兼容的 `phase*` 和 `order*` 样例（包括旧的异步结果/消费者示例）只用于旧接口回归，不要当作主链路入口。
+历史兼容样例的完整清单见 API 调试索引；按清单区分，不能仅凭 `phase*` 或 `order*` 文件名判断当前可用性。
 
 ## 读代码时的检查问题
 

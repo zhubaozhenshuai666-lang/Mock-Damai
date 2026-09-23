@@ -152,7 +152,7 @@ Content-Type: application/json
 }
 
 
-### 18. 立即查询第三笔订单：应为 PENDING_PAYMENT，然后等待至少 70 秒
+### 18. 立即查询第三笔订单：应为 PENDING_PAYMENT；等待超过返回的 expireTime（当前默认 10 分钟）
 GET {{baseUrl}}/api/orders/{{timeoutOrderId}}
 
 
