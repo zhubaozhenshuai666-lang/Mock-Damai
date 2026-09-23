@@ -45,6 +45,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 @Service
 public class AdminBusinessServiceImpl implements AdminBusinessService {
@@ -628,6 +629,14 @@ public class AdminBusinessServiceImpl implements AdminBusinessService {
         }
         cacheService.delete(RedisKeyConstant.showDetailKey(showId));
         cacheService.delete(RedisKeyConstant.showSessionsKey(showId));
+        List<PerformanceSession> sessions = showMapper.adminSelectSessionsByShowId(showId);
+        if (sessions != null) {
+            sessions.stream()
+                    .map(PerformanceSession::getId)
+                    .filter(Objects::nonNull)
+                    .forEach(sessionId -> cacheService.delete(
+                            RedisKeyConstant.sessionTicketCategoriesKey(sessionId)));
+        }
     }
 
     private void invalidateSessionCaches(Long sessionId, Long showId) {

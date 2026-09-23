@@ -395,6 +395,24 @@ class AdminBusinessServiceImplTest {
     }
 
     @Test
+    void publishShowInvalidatesTicketCategoryCachesForAllSessions() {
+        PerformanceSession first = session(ShowStatusEnum.DRAFT.getCode());
+        first.setId(10L);
+        PerformanceSession second = session(ShowStatusEnum.DRAFT.getCode());
+        second.setId(11L);
+        when(showMapper.selectShowInfoById(1L)).thenReturn(showInfo(ShowStatusEnum.DRAFT.getCode()));
+        when(showMapper.adminSelectSessionsByShowId(1L)).thenReturn(List.of(first, second));
+        ReflectionTestUtils.setField(service, "cacheService", cacheService);
+
+        service.publishShow(1L);
+
+        verify(cacheService).delete(RedisKeyConstant.showDetailKey(1L));
+        verify(cacheService).delete(RedisKeyConstant.showSessionsKey(1L));
+        verify(cacheService).delete(RedisKeyConstant.sessionTicketCategoriesKey(10L));
+        verify(cacheService).delete(RedisKeyConstant.sessionTicketCategoriesKey(11L));
+    }
+
+    @Test
     void publishTicketCategoryRejectsWhenParentSessionAlreadyStarted() {
         TicketCategory existing = ticketCategory();
         existing.setStatus(TicketCategoryStatusEnum.DRAFT.getCode());
