@@ -2,6 +2,7 @@ package com.zewbby.smartticket.service.impl;
 
 import com.zewbby.smartticket.common.BusinessException;
 import com.zewbby.smartticket.config.StockBucketProperties;
+import com.zewbby.smartticket.constant.RedisKeyConstant;
 import com.zewbby.smartticket.domain.dto.AdminCreateSessionRequest;
 import com.zewbby.smartticket.domain.dto.AdminCreateShowRequest;
 import com.zewbby.smartticket.domain.dto.AdminCreateTicketCategoryRequest;
@@ -27,12 +28,14 @@ import com.zewbby.smartticket.mapper.TicketStockMapper;
 import com.zewbby.smartticket.mapper.VenueMapper;
 import com.zewbby.smartticket.service.StockCacheService;
 import com.zewbby.smartticket.service.StockLuaService;
+import com.zewbby.smartticket.service.CacheService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -73,6 +76,9 @@ class AdminBusinessServiceImplTest {
 
     @Mock
     private StockLuaService stockLuaService;
+
+    @Mock
+    private CacheService cacheService;
 
     private AdminBusinessServiceImpl service;
 
@@ -370,6 +376,22 @@ class AdminBusinessServiceImplTest {
                 .hasMessageContaining("场次已开演");
 
         verify(showMapper, never()).updateSessionStatus(1L, ShowStatusEnum.PUBLISHED.getCode());
+    }
+
+    @Test
+    void publishSessionInvalidatesPublicShowCaches() {
+        PerformanceSession session = session(ShowStatusEnum.DRAFT.getCode());
+        session.setId(10L);
+        session.setShowId(1L);
+        when(showMapper.selectSessionById(10L)).thenReturn(session);
+        when(showMapper.selectShowInfoById(1L)).thenReturn(showInfo(ShowStatusEnum.DRAFT.getCode()));
+        ReflectionTestUtils.setField(service, "cacheService", cacheService);
+
+        service.publishSession(10L);
+
+        verify(cacheService).delete(RedisKeyConstant.showDetailKey(1L));
+        verify(cacheService).delete(RedisKeyConstant.showSessionsKey(1L));
+        verify(cacheService).delete(RedisKeyConstant.sessionTicketCategoriesKey(10L));
     }
 
     @Test

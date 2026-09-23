@@ -4,6 +4,7 @@ import com.zewbby.smartticket.aop.AdminAudit;
 import com.zewbby.smartticket.common.BusinessException;
 import com.zewbby.smartticket.config.StockBucketProperties;
 import com.zewbby.smartticket.constant.ErrorMessageConstant;
+import com.zewbby.smartticket.constant.RedisKeyConstant;
 import com.zewbby.smartticket.domain.dto.AdminCreateSessionRequest;
 import com.zewbby.smartticket.domain.dto.AdminCreateShowRequest;
 import com.zewbby.smartticket.domain.dto.AdminCreateTicketCategoryRequest;
@@ -31,6 +32,7 @@ import com.zewbby.smartticket.mapper.TicketStockBucketMapper;
 import com.zewbby.smartticket.mapper.TicketStockMapper;
 import com.zewbby.smartticket.mapper.VenueMapper;
 import com.zewbby.smartticket.service.AdminBusinessService;
+import com.zewbby.smartticket.service.CacheService;
 import com.zewbby.smartticket.service.ShowRelationCacheService;
 import com.zewbby.smartticket.service.StockCacheService;
 import com.zewbby.smartticket.service.StockLuaService;
@@ -72,6 +74,9 @@ public class AdminBusinessServiceImpl implements AdminBusinessService {
     private final StockBucketProperties stockBucketProperties;
 
     private final ShowRelationCacheService showRelationCacheService;
+
+    @Autowired(required = false)
+    private CacheService cacheService;
 
     @Autowired
     public AdminBusinessServiceImpl(VenueMapper venueMapper,
@@ -167,6 +172,7 @@ public class AdminBusinessServiceImpl implements AdminBusinessService {
         showInfo.setVenueId(request.getVenueId());
         showInfo.setDescription(request.getDescription());
         showMapper.updateShow(showInfo);
+        invalidateShowCaches(showId);
         return requireShow(showId);
     }
 
@@ -177,6 +183,7 @@ public class AdminBusinessServiceImpl implements AdminBusinessService {
         requireShow(showId);
         ensureShowNotStarted(showId);
         showMapper.updateShowStatus(showId, ShowStatusEnum.PUBLISHED.getCode());
+        invalidateShowCaches(showId);
         refreshShowRelationCacheIfAvailable();
     }
 
@@ -190,6 +197,7 @@ public class AdminBusinessServiceImpl implements AdminBusinessService {
             throw new BusinessException("存在待支付订单，不能下架演出");
         }
         showMapper.updateShowStatus(showId, ShowStatusEnum.OFFLINE.getCode());
+        invalidateShowCaches(showId);
         refreshShowRelationCacheIfAvailable();
     }
 
@@ -230,6 +238,7 @@ public class AdminBusinessServiceImpl implements AdminBusinessService {
         session.setStartTime(request.getStartTime());
         session.setEndTime(request.getEndTime());
         showMapper.updateSession(session);
+        invalidateSessionCaches(sessionId, existing.getShowId());
         return requireSession(sessionId);
     }
 
@@ -241,6 +250,7 @@ public class AdminBusinessServiceImpl implements AdminBusinessService {
         requireShow(session.getShowId());
         ensureSessionNotStarted(session, "场次已开演，禁止发布");
         showMapper.updateSessionStatus(sessionId, ShowStatusEnum.PUBLISHED.getCode());
+        invalidateSessionCaches(sessionId, session.getShowId());
         refreshShowRelationCacheIfAvailable();
     }
 
@@ -254,6 +264,7 @@ public class AdminBusinessServiceImpl implements AdminBusinessService {
             throw new BusinessException("存在待支付订单，不能下架场次");
         }
         showMapper.updateSessionStatus(sessionId, ShowStatusEnum.OFFLINE.getCode());
+        invalidateSessionCaches(sessionId, existing.getShowId());
         refreshShowRelationCacheIfAvailable();
     }
 
@@ -304,6 +315,7 @@ public class AdminBusinessServiceImpl implements AdminBusinessService {
         ticketCategory.setCategoryName(request.getCategoryName());
         ticketCategory.setPrice(request.getPrice());
         ticketCategoryMapper.update(ticketCategory);
+        invalidateSessionCaches(existing.getSessionId(), null);
         return requireTicketCategory(ticketCategoryId);
     }
 
@@ -314,6 +326,7 @@ public class AdminBusinessServiceImpl implements AdminBusinessService {
         TicketCategory ticketCategory = requireTicketCategory(ticketCategoryId);
         ensureTicketCategorySessionNotStarted(ticketCategory, "票档所属场次已开演，禁止发布票档");
         ticketCategoryMapper.updateStatus(ticketCategoryId, TicketCategoryStatusEnum.PUBLISHED.getCode());
+        invalidateSessionCaches(ticketCategory.getSessionId(), null);
         refreshShowRelationCacheIfAvailable();
     }
 
@@ -327,6 +340,7 @@ public class AdminBusinessServiceImpl implements AdminBusinessService {
             throw new BusinessException("存在待支付订单，不能下架票档");
         }
         ticketCategoryMapper.updateStatus(ticketCategoryId, TicketCategoryStatusEnum.OFFLINE.getCode());
+        invalidateSessionCaches(existing.getSessionId(), null);
         refreshShowRelationCacheIfAvailable();
     }
 
@@ -605,6 +619,29 @@ public class AdminBusinessServiceImpl implements AdminBusinessService {
     private void refreshShowRelationCacheIfAvailable() {
         if (showRelationCacheService != null) {
             showRelationCacheService.refreshPublishedRelations();
+        }
+    }
+
+    private void invalidateShowCaches(Long showId) {
+        if (cacheService == null || showId == null) {
+            return;
+        }
+        cacheService.delete(RedisKeyConstant.showDetailKey(showId));
+        cacheService.delete(RedisKeyConstant.showSessionsKey(showId));
+    }
+
+    private void invalidateSessionCaches(Long sessionId, Long showId) {
+        if (cacheService == null) {
+            return;
+        }
+        Long resolvedShowId = showId;
+        if (resolvedShowId == null && sessionId != null) {
+            PerformanceSession session = showMapper.selectSessionById(sessionId);
+            resolvedShowId = session == null ? null : session.getShowId();
+        }
+        invalidateShowCaches(resolvedShowId);
+        if (sessionId != null) {
+            cacheService.delete(RedisKeyConstant.sessionTicketCategoriesKey(sessionId));
         }
     }
 
