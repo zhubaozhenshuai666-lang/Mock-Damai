@@ -13,6 +13,7 @@ GET {{baseUrl}}/api/shows/{{showId}}
 
 
 ### 3. 根据演出 ID 查询场次列表
+### 查看返回的 saleStartTime/saleEndTime；预约仅能在 saleStartTime 前编辑并完成
 GET {{baseUrl}}/api/shows/{{showId}}/sessions
 
 

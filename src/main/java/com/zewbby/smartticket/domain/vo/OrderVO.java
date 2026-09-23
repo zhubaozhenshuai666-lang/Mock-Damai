@@ -26,8 +26,8 @@ public class OrderVO {
     private Long ticketCategoryId;
 
     private Integer quantity;
-    private List<TicketOrderAudienceVO> audiences;
 
+    private List<TicketOrderAudienceVO> audiences;
 
     private String showTitle;
 

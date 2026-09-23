@@ -21,6 +21,8 @@ public class AsyncCreateOrderMessage {
 
     private Long ticketCategoryId;
 
+    private Long purchasePlanId;
+
     private Integer quantity;
 
     private Integer stockBucketVersion;

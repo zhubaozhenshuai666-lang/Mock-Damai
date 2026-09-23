@@ -143,4 +143,20 @@ class ShowServiceImplTest {
         assertThat(result).isSameAs(cached);
         verify(showMapper, never()).selectShowDetailById(1L);
     }
+
+    @Test
+    void publicSessionCarriesSaleWindow() {
+        SessionVO session = new SessionVO();
+        session.setId(10L);
+        session.setSaleStartTime(java.time.LocalDateTime.of(2026, 10, 1, 10, 0));
+        session.setSaleEndTime(java.time.LocalDateTime.of(2026, 10, 1, 12, 0));
+        when(cacheService.getRaw(RedisKeyConstant.showSessionsKey(1L))).thenReturn(List.of(session));
+
+        List<SessionVO> result = showService.listSessions(1L);
+
+        assertThat(result.get(0).getSaleStartTime())
+                .isEqualTo(java.time.LocalDateTime.of(2026, 10, 1, 10, 0));
+        assertThat(result.get(0).getSaleEndTime())
+                .isEqualTo(java.time.LocalDateTime.of(2026, 10, 1, 12, 0));
+    }
 }

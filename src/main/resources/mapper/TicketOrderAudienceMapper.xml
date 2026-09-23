@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.zewbby.smartticket.mapper.TicketOrderAudienceMapper">
+
+    <insert id="insertBatch">
+        INSERT INTO ticket_order_audience (
+            order_id,
+            line_no,
+            audience_id,
+            name_snapshot,
+            id_no_hash_snapshot,
+            created_at
+        ) VALUES
+        <foreach collection="audiences" item="item" separator=",">
+            (
+                #{item.orderId},
+                #{item.lineNo},
+                #{item.audienceId},
+                #{item.nameSnapshot},
+                #{item.idNoHashSnapshot},
+                #{item.createdAt}
+            )
+        </foreach>
+    </insert>
+
+    <select id="selectByOrderId"
+            resultType="com.zewbby.smartticket.domain.entity.TicketOrderAudience">
+        SELECT
+            id,
+            order_id,
+            line_no,
+            audience_id,
+            name_snapshot,
+            id_no_hash_snapshot,
+            created_at
+        FROM ticket_order_audience
+        WHERE order_id = #{orderId}
+        ORDER BY line_no ASC
+    </select>
+</mapper>

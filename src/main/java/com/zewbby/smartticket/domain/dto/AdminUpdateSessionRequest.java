@@ -13,4 +13,10 @@ public class AdminUpdateSessionRequest {
 
     @NotNull(message = "结束时间不能为空")
     private LocalDateTime endTime;
+
+    @NotNull(message = "开售开始时间不能为空")
+    private LocalDateTime saleStartTime;
+
+    @NotNull(message = "开售结束时间不能为空")
+    private LocalDateTime saleEndTime;
 }

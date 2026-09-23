@@ -90,6 +90,7 @@ public class OrderController {
 
     /**
      * 异步创建订单请求，只返回请求ID，不在接口线程中扣库存或创建正式订单
+     * 预约抢票前端应使用 /api/purchase-plans/{planId}/submit，确保场次、票档、数量和观演人来自已确认的购买计划。
      * @param request
      * @return
      */

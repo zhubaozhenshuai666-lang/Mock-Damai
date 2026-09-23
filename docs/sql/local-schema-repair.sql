@@ -72,6 +72,112 @@ END//
 
 DELIMITER ;
 
+CREATE TABLE IF NOT EXISTS audience_person (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    user_id BIGINT NOT NULL,
+    name VARCHAR(64) NOT NULL,
+    id_type VARCHAR(32) NOT NULL,
+    id_no_ciphertext VARCHAR(512) NOT NULL,
+    id_no_hash VARCHAR(128) NOT NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+    version INT NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    UNIQUE KEY uk_audience_user_id_hash (user_id, id_no_hash),
+    KEY idx_audience_user_status (user_id, status)
+);
+
+CREATE TABLE IF NOT EXISTS ticket_purchase_plan (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    plan_no VARCHAR(64) NOT NULL,
+    user_id BIGINT NOT NULL,
+    show_id BIGINT NOT NULL,
+    session_id BIGINT NULL,
+    ticket_category_id BIGINT NULL,
+    quantity INT NULL,
+    status VARCHAR(32) NOT NULL,
+    version INT NOT NULL DEFAULT 0,
+    active_plan_key VARCHAR(128) NULL,
+    completed_version INT NULL,
+    default_audience_count INT NOT NULL DEFAULT 0,
+    selected_audience_count INT NOT NULL DEFAULT 0,
+    idempotency_token VARCHAR(128) NULL,
+    order_request_id VARCHAR(128) NULL,
+    order_id BIGINT NULL,
+    expire_time DATETIME NULL,
+    confirmed_at DATETIME NULL,
+    completed_at DATETIME NULL,
+    submitted_at DATETIME NULL,
+    fail_reason VARCHAR(512) NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    UNIQUE KEY uk_purchase_plan_no (plan_no),
+    UNIQUE KEY uk_purchase_plan_active_key (active_plan_key),
+    KEY idx_purchase_plan_user_status (user_id, status),
+    KEY idx_purchase_plan_order_request (order_request_id),
+    KEY idx_purchase_plan_expire (status, expire_time)
+);
+
+CREATE TABLE IF NOT EXISTS ticket_purchase_plan_audience (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    plan_id BIGINT NOT NULL,
+    audience_id BIGINT NOT NULL,
+    selection_type VARCHAR(32) NOT NULL,
+    line_no INT NOT NULL,
+    name_snapshot VARCHAR(64) NOT NULL,
+    id_no_hash_snapshot VARCHAR(128) NOT NULL,
+    created_at DATETIME NOT NULL,
+    UNIQUE KEY uk_plan_audience_selection (plan_id, selection_type, audience_id),
+    KEY idx_plan_audience_plan (plan_id, selection_type)
+);
+
+CREATE TABLE IF NOT EXISTS ticket_order_audience (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    order_id BIGINT NOT NULL,
+    line_no INT NOT NULL,
+    audience_id BIGINT NOT NULL,
+    name_snapshot VARCHAR(64) NOT NULL,
+    id_no_hash_snapshot VARCHAR(128) NOT NULL,
+    created_at DATETIME NOT NULL,
+    UNIQUE KEY uk_order_audience_line (order_id, line_no),
+    UNIQUE KEY uk_order_audience_identity (order_id, audience_id),
+    KEY idx_order_audience_order (order_id)
+);
+
+/* 异步创单请求表是预约计划提交和旧异步下单共用的核心表。旧库若缺表，后续 add_column_if_missing 无法修复，因此先补建。 */
+CREATE TABLE IF NOT EXISTS ticket_order_request (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    request_id VARCHAR(128) NOT NULL,
+    user_id BIGINT NOT NULL,
+    show_id BIGINT NOT NULL,
+    session_id BIGINT NOT NULL,
+    ticket_category_id BIGINT NOT NULL,
+    purchase_plan_id BIGINT NULL,
+    quantity INT NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    order_id BIGINT NULL,
+    stock_bucket_version INT NULL DEFAULT 1,
+    stock_bucket_no INT NULL,
+    processing_at DATETIME NULL,
+    redis_deducted TINYINT(1) NOT NULL DEFAULT 0,
+    deducted_quantity INT NOT NULL DEFAULT 0,
+    deducted_at DATETIME NULL,
+    compensated TINYINT(1) NOT NULL DEFAULT 0,
+    compensation_status VARCHAR(32) NOT NULL DEFAULT 'NONE',
+    compensated_at DATETIME NULL,
+    fail_reason VARCHAR(512) NULL,
+    message_id VARCHAR(128) NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    UNIQUE KEY uk_ticket_order_request_request_id (request_id),
+    KEY idx_ticket_order_request_user_request (user_id, request_id),
+    KEY idx_ticket_order_request_order_id (order_id),
+    KEY idx_ticket_order_request_purchase_plan (purchase_plan_id),
+    KEY idx_ticket_order_request_inflight_calc (ticket_category_id, status, redis_deducted, compensated, compensation_status, deducted_quantity),
+    KEY idx_ticket_order_request_compensation_scan (status, redis_deducted, compensated, compensation_status, updated_at),
+    KEY idx_ticket_order_request_bucket_version (ticket_category_id, stock_bucket_version, stock_bucket_no)
+);
+
 CREATE TABLE IF NOT EXISTS admin_operation_log (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
     operator_user_id BIGINT NOT NULL,
@@ -248,7 +354,15 @@ CALL add_column_if_missing('ticket_order', 'total_amount', 'decimal(10,2) NULL',
 CALL add_column_if_missing('ticket_order', 'cancel_reason', 'varchar(255) NULL', 'close_time');
 CALL add_column_if_missing('ticket_order', 'version', 'int NOT NULL DEFAULT 0', 'cancel_reason');
 
+CALL add_column_if_missing('ticket_purchase_plan', 'active_plan_key', 'varchar(128) NULL', 'version');
+CALL add_column_if_missing('ticket_purchase_plan', 'completed_version', 'int NULL', 'active_plan_key');
+CALL add_column_if_missing('ticket_purchase_plan', 'completed_at', 'datetime NULL', 'confirmed_at');
+
+CALL add_column_if_missing('performance_session', 'sale_start_time', 'datetime NULL', 'end_time');
+CALL add_column_if_missing('performance_session', 'sale_end_time', 'datetime NULL', 'sale_start_time');
+
 CALL add_column_if_missing('ticket_order_request', 'stock_bucket_version', 'int NOT NULL DEFAULT 1', 'order_id');
+CALL add_column_if_missing('ticket_order_request', 'purchase_plan_id', 'bigint NULL', 'ticket_category_id');
 CALL add_column_if_missing('ticket_order_request', 'stock_bucket_no', 'int NULL', 'stock_bucket_version');
 CALL add_column_if_missing('ticket_order_request', 'processing_at', 'datetime NULL', 'stock_bucket_no');
 CALL add_column_if_missing('ticket_order_request', 'redis_deducted', 'tinyint(1) NOT NULL DEFAULT 0', 'processing_at');
@@ -260,10 +374,13 @@ CALL add_column_if_missing('ticket_order_request', 'compensated_at', 'datetime N
 CALL add_column_if_missing('ticket_order_request', 'message_id', 'varchar(128) NULL', 'fail_reason');
 
 CALL add_index_if_missing('ticket_stock', 'uk_ticket_stock_category', 'UNIQUE KEY `uk_ticket_stock_category` (`ticket_category_id`)');
+CALL add_index_if_missing('ticket_purchase_plan', 'uk_purchase_plan_active_key', 'UNIQUE KEY `uk_purchase_plan_active_key` (`active_plan_key`)');
+CALL add_index_if_missing('performance_session', 'idx_session_sale_window', 'KEY `idx_session_sale_window` (`status`, `sale_start_time`, `sale_end_time`)');
 
 CALL add_index_if_missing('ticket_order_request', 'uk_ticket_order_request_request_id', 'UNIQUE KEY `uk_ticket_order_request_request_id` (`request_id`)');
 CALL add_index_if_missing('ticket_order_request', 'idx_ticket_order_request_user_request', 'KEY `idx_ticket_order_request_user_request` (`user_id`, `request_id`)');
 CALL add_index_if_missing('ticket_order_request', 'idx_ticket_order_request_order_id', 'KEY `idx_ticket_order_request_order_id` (`order_id`)');
+CALL add_index_if_missing('ticket_order_request', 'idx_ticket_order_request_purchase_plan', 'KEY `idx_ticket_order_request_purchase_plan` (`purchase_plan_id`)');
 CALL add_index_if_missing('ticket_order_request', 'idx_ticket_order_request_inflight_calc', 'KEY `idx_ticket_order_request_inflight_calc` (`ticket_category_id`, `status`, `redis_deducted`, `compensated`, `compensation_status`, `deducted_quantity`)');
 CALL add_index_if_missing('ticket_order_request', 'idx_ticket_order_request_compensation_scan', 'KEY `idx_ticket_order_request_compensation_scan` (`status`, `redis_deducted`, `compensated`, `compensation_status`, `updated_at`)');
 CALL add_index_if_missing('ticket_order_request', 'idx_ticket_order_request_bucket_version', 'KEY `idx_ticket_order_request_bucket_version` (`ticket_category_id`, `stock_bucket_version`, `stock_bucket_no`)');

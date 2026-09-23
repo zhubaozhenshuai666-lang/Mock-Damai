@@ -52,6 +52,8 @@ smart-ticket:
   jwt:
     secret: ${SMART_TICKET_JWT_SECRET:smart-ticket-dev-secret-at-least-32-bytes}
     expire-minutes: ${SMART_TICKET_JWT_EXPIRE_MINUTES:120}
+  audience-identity:
+    encryption-secret: ${SMART_TICKET_AUDIENCE_IDENTITY_ENCRYPTION_SECRET:smart-ticket-audience-identity-secret-at-least-32-bytes}
   auth:
     login-fail-threshold: ${SMART_TICKET_LOGIN_FAIL_THRESHOLD:5}
     login-lock-minutes: ${SMART_TICKET_LOGIN_LOCK_MINUTES:10}
@@ -115,6 +117,15 @@ smart-ticket:
     rocket-mq-order-timeout-consumer-group: ${SMART_TICKET_ORDER_TIMEOUT_ROCKETMQ_CONSUMER_GROUP:smart-ticket-order-timeout}
     rocket-mq-delay-level: ${SMART_TICKET_ORDER_TIMEOUT_ROCKETMQ_DELAY_LEVEL:16}
     rocket-mq-send-timeout-millis: ${SMART_TICKET_ORDER_TIMEOUT_ROCKETMQ_SEND_TIMEOUT_MILLIS:3000}
+  purchase-plan:
+    enabled: ${SMART_TICKET_PURCHASE_PLAN_ENABLED:true}
+    max-quantity: ${SMART_TICKET_PURCHASE_PLAN_MAX_QUANTITY:4}
+    expire-scan-batch-size: ${SMART_TICKET_PURCHASE_PLAN_EXPIRE_SCAN_BATCH_SIZE:500}
+    expire-scan-fixed-delay-millis: ${SMART_TICKET_PURCHASE_PLAN_EXPIRE_SCAN_FIXED_DELAY_MILLIS:1000}
+    reconciliation-enabled: ${SMART_TICKET_PURCHASE_PLAN_RECONCILIATION_ENABLED:true}
+    reconciliation-batch-size: ${SMART_TICKET_PURCHASE_PLAN_RECONCILIATION_BATCH_SIZE:500}
+    reconciliation-fixed-delay-millis: ${SMART_TICKET_PURCHASE_PLAN_RECONCILIATION_FIXED_DELAY_MILLIS:1000}
+    reconciliation-timeout-millis: ${SMART_TICKET_PURCHASE_PLAN_RECONCILIATION_TIMEOUT_MILLIS:120000}
   stock-consistency:
     enabled: ${SMART_TICKET_STOCK_CONSISTENCY_ENABLED:false}
     fixed-delay-seconds: ${SMART_TICKET_STOCK_CONSISTENCY_FIXED_DELAY_SECONDS:300}
@@ -177,6 +188,30 @@ smart-ticket:
     lock-ttl-seconds: ${SMART_TICKET_SHOW_CACHE_LOCK_TTL_SECONDS:5}
     lock-retry-sleep-millis: ${SMART_TICKET_SHOW_CACHE_LOCK_RETRY_SLEEP_MILLIS:50}
     lock-retry-times: ${SMART_TICKET_SHOW_CACHE_LOCK_RETRY_TIMES:3}
+  artist-ranking:
+    enabled: ${SMART_TICKET_ARTIST_RANKING_ENABLED:true}
+    detail-click-weight: ${SMART_TICKET_ARTIST_RANKING_DETAIL_CLICK_WEIGHT:1.0}
+    search-weight: ${SMART_TICKET_ARTIST_RANKING_SEARCH_WEIGHT:0.3}
+    purchase-intent-weight: ${SMART_TICKET_ARTIST_RANKING_PURCHASE_INTENT_WEIGHT:3.0}
+    paid-order-weight: ${SMART_TICKET_ARTIST_RANKING_PAID_ORDER_WEIGHT:10.0}
+    content-component-weight: ${SMART_TICKET_ARTIST_RANKING_CONTENT_COMPONENT_WEIGHT:0.40}
+    interest-component-weight: ${SMART_TICKET_ARTIST_RANKING_INTEREST_COMPONENT_WEIGHT:0.25}
+    intent-component-weight: ${SMART_TICKET_ARTIST_RANKING_INTENT_COMPONENT_WEIGHT:0.15}
+    paid-component-weight: ${SMART_TICKET_ARTIST_RANKING_PAID_COMPONENT_WEIGHT:0.12}
+    task-component-weight: ${SMART_TICKET_ARTIST_RANKING_TASK_COMPONENT_WEIGHT:0.08}
+    anonymous-quality-factor: ${SMART_TICKET_ARTIST_RANKING_ANONYMOUS_QUALITY_FACTOR:0.35}
+    authenticated-quality-factor: ${SMART_TICKET_ARTIST_RANKING_AUTHENTICATED_QUALITY_FACTOR:1.0}
+    saturation-scale: ${SMART_TICKET_ARTIST_RANKING_SATURATION_SCALE:100.0}
+    default-limit: ${SMART_TICKET_ARTIST_RANKING_DEFAULT_LIMIT:20}
+    max-limit: ${SMART_TICKET_ARTIST_RANKING_MAX_LIMIT:100}
+    dedup-ttl-seconds: ${SMART_TICKET_ARTIST_RANKING_DEDUP_TTL_SECONDS:86400}
+    daily-key-ttl-seconds: ${SMART_TICKET_ARTIST_RANKING_DAILY_KEY_TTL_SECONDS:691200}
+    weekly-key-ttl-seconds: ${SMART_TICKET_ARTIST_RANKING_WEEKLY_KEY_TTL_SECONDS:1296000}
+    monthly-key-ttl-seconds: ${SMART_TICKET_ARTIST_RANKING_MONTHLY_KEY_TTL_SECONDS:5184000}
+    hourly-key-ttl-seconds: ${SMART_TICKET_ARTIST_RANKING_HOURLY_KEY_TTL_SECONDS:172800}
+    hot-window-hours: ${SMART_TICKET_ARTIST_RANKING_HOT_WINDOW_HOURS:24}
+    hot-half-life-hours: ${SMART_TICKET_ARTIST_RANKING_HOT_HALF_LIFE_HOURS:6.0}
+    artist-max-length: ${SMART_TICKET_ARTIST_RANKING_ARTIST_MAX_LENGTH:64}
   rate-limit:
     enabled: ${SMART_TICKET_RATE_LIMIT_ENABLED:true}
     algorithm: ${SMART_TICKET_RATE_LIMIT_ALGORITHM:token-bucket}

@@ -28,5 +28,9 @@ public class SessionVO {
 
     private LocalDateTime endTime;
 
+    private LocalDateTime saleStartTime;
+
+    private LocalDateTime saleEndTime;
+
     private List<TicketCategoryVO> ticketCategories;
 }

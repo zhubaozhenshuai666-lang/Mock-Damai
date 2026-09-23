@@ -11,6 +11,7 @@
         <result property="showId" column="show_id"/>
         <result property="sessionId" column="session_id"/>
         <result property="ticketCategoryId" column="ticket_category_id"/>
+        <result property="purchasePlanId" column="purchase_plan_id"/>
         <result property="quantity" column="quantity"/>
         <result property="status" column="status"/>
         <result property="orderId" column="order_id"/>
@@ -36,6 +37,7 @@
         show_id,
         session_id,
         ticket_category_id,
+        purchase_plan_id,
         quantity,
         status,
         order_id,
@@ -64,6 +66,7 @@
             show_id,
             session_id,
             ticket_category_id,
+            purchase_plan_id,
             quantity,
             status,
             order_id,
@@ -86,6 +89,7 @@
             #{showId},
             #{sessionId},
             #{ticketCategoryId},
+            #{purchasePlanId},
             #{quantity},
             #{status},
             #{orderId},
@@ -115,6 +119,7 @@
             show_id,
             session_id,
             ticket_category_id,
+            purchase_plan_id,
             quantity,
             status,
             order_id,
@@ -137,6 +142,7 @@
             #{showId},
             #{sessionId},
             #{ticketCategoryId},
+            #{purchasePlanId},
             #{quantity},
             #{status},
             #{orderId},
@@ -163,6 +169,7 @@
             show_id,
             session_id,
             ticket_category_id,
+            purchase_plan_id,
             quantity,
             status,
             order_id,
@@ -187,6 +194,7 @@
                 #{request.showId},
                 #{request.sessionId},
                 #{request.ticketCategoryId},
+                #{request.purchasePlanId},
                 #{request.quantity},
                 #{request.status},
                 #{request.orderId},

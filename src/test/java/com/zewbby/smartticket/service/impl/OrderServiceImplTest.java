@@ -466,10 +466,27 @@ class OrderServiceImplTest {
 
         assertThatThrownBy(() -> orderService.submitAsyncOrder(validRequest()))
                 .isInstanceOf(BusinessException.class)
-                .hasMessageContaining(ErrorMessageConstant.STOCK_NOT_ENOUGH);
+                .hasMessageContaining(ErrorMessageConstant.STOCK_NOT_ENOUGH)
+                .satisfies(exception -> assertThat(exception.getClass().getSimpleName())
+                        .isEqualTo("AsyncOrderSubmissionRejectedException"));
 
         verify(orderRequestMapper, never()).insert(any());
         verify(orderRequestMapper, never()).markFailed(anyLong(), anyString());
+        verify(asyncOrderMessagePublisher, never()).publish(any());
+    }
+
+    @Test
+    void submitAsyncOrderTreatsDuplicateRedisDeductionAsUncertain() {
+        mockCommonCreateOrderChecks(true);
+        when(stockLuaService.preDeductStock(anyString(), anyLong(), anyInt()))
+                .thenReturn(RedisStockDeductResult.DUPLICATE);
+
+        assertThatThrownBy(() -> orderService.submitAsyncOrder(validRequest()))
+                .isInstanceOf(BusinessException.class)
+                .isNotInstanceOf(com.zewbby.smartticket.service.AsyncOrderSubmissionRejectedException.class)
+                .hasMessageContaining(ErrorMessageConstant.ORDER_REPEAT_SUBMIT);
+
+        verify(orderRequestMapper, never()).insert(any());
         verify(asyncOrderMessagePublisher, never()).publish(any());
     }
 
@@ -479,7 +496,9 @@ class OrderServiceImplTest {
 
         assertThatThrownBy(() -> orderService.submitAsyncOrder(validRequest()))
                 .isInstanceOf(BusinessException.class)
-                .hasMessageContaining(ErrorMessageConstant.TICKET_SOLD_OUT);
+                .hasMessageContaining(ErrorMessageConstant.TICKET_SOLD_OUT)
+                .satisfies(exception -> assertThat(exception.getClass().getSimpleName())
+                        .isEqualTo("AsyncOrderSubmissionRejectedException"));
 
         verify(orderRequestMapper, never()).insert(any());
         verify(asyncOrderMessagePublisher, never()).publish(any());

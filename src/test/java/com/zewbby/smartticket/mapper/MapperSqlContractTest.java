@@ -72,6 +72,64 @@ class MapperSqlContractTest {
     }
 
     @Test
+    void sessionSqlContainsSaleWindowFields() throws Exception {
+        String schema = Files.readString(Path.of("docs/sql/schema.sql"));
+        String repair = Files.readString(Path.of("docs/sql/local-schema-repair.sql"));
+        String showXml = Files.readString(Path.of("src/main/resources/mapper/ShowMapper.xml"));
+
+        assertThat(schema).contains("sale_start_time DATETIME");
+        assertThat(schema).contains("sale_end_time DATETIME");
+        assertThat(repair).contains("sale_start_time");
+        assertThat(repair).contains("sale_end_time");
+        assertThat(showXml).contains("sale_start_time");
+        assertThat(showXml).contains("sale_end_time");
+    }
+
+    @Test
+    void purchasePlanSqlUsesMysqlCompatibleUpdatesAndExactRequestBinding() throws Exception {
+        String xml = Files.readString(Path.of("src/main/resources/mapper/TicketPurchasePlanMapper.xml"));
+
+        assertThat(xml).doesNotContainPattern("(?m)^\\s*SET\\s+p\\.");
+        assertThat(xml).doesNotContainPattern("(?m)^\\s*p\\.[a-z_]+\\s*=");
+        assertThat(xml).doesNotContain("OR order_request_id IS NULL");
+        assertThat(xml).contains("ps.sale_start_time &lt;= #{now}");
+        assertThat(xml).contains("ps.sale_end_time &lt;= #{now}");
+        assertThat(xml).doesNotContain("ps.sale_start_time <= #{now}");
+        assertThat(xml).doesNotContain("ps.sale_end_time <= #{now}");
+
+        assertThat(mapperStatement(xml, "markOrderCreated"))
+                .contains("AND order_request_id = #{orderRequestId}");
+        assertThat(mapperStatement(xml, "markFailed"))
+                .contains("AND order_request_id = #{orderRequestId}");
+        assertThat(mapperStatement(xml, "markReconciliationRequired"))
+                .contains("AND order_request_id = #{orderRequestId}")
+                .contains("status IN ('SUBMITTING', 'RECONCILIATION_REQUIRED')");
+    }
+
+    @Test
+    void purchasePlanExpirySqlKeepsEditableAndReadyStateBoundaries() throws Exception {
+        String xml = Files.readString(Path.of("src/main/resources/mapper/TicketPurchasePlanMapper.xml"));
+
+        assertThat(mapperStatement(xml, "expireEditable"))
+                .contains("WHERE p.status = 'DRAFT'")
+                .contains("ps.sale_start_time &lt;= #{now}")
+                .contains("active_plan_key = NULL");
+        assertThat(mapperStatement(xml, "expireReadyAfterSale"))
+                .contains("WHERE p.status = 'READY'")
+                .contains("ps.sale_end_time &lt;= #{now}")
+                .contains("active_plan_key = NULL");
+    }
+
+    private String mapperStatement(String xml, String id) {
+        String startTag = "<update id=\"" + id + "\">";
+        int start = xml.indexOf(startTag);
+        assertThat(start).as("mapper statement %s exists", id).isGreaterThanOrEqualTo(0);
+        int end = xml.indexOf("</update>", start);
+        assertThat(end).as("mapper statement %s is closed", id).isGreaterThan(start);
+        return xml.substring(start, end);
+    }
+
+    @Test
     void orderTimeoutConstantsUseSingleSourceForMinutesAndMillis() {
         assertThat(OrderConstant.ORDER_TIMEOUT_TTL_MILLIS)
                 .isEqualTo(OrderConstant.ORDER_TIMEOUT_MINUTES * 60 * 1000);

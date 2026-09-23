@@ -9,6 +9,7 @@ import com.zewbby.smartticket.domain.dto.MockPaymentRequest;
 import com.zewbby.smartticket.domain.entity.PaymentCallbackLog;
 import com.zewbby.smartticket.domain.entity.PaymentFlowLog;
 import com.zewbby.smartticket.domain.entity.PaymentOrder;
+import com.zewbby.smartticket.domain.entity.ShowInfo;
 import com.zewbby.smartticket.domain.entity.TicketOrder;
 import com.zewbby.smartticket.domain.entity.TicketOrderRequest;
 import com.zewbby.smartticket.domain.vo.PaymentVO;
@@ -20,10 +21,13 @@ import com.zewbby.smartticket.enums.PaymentStatusEnum;
 import com.zewbby.smartticket.mapper.OrderMapper;
 import com.zewbby.smartticket.mapper.OrderRequestMapper;
 import com.zewbby.smartticket.mapper.PaymentMapper;
+import com.zewbby.smartticket.mapper.ShowMapper;
 import com.zewbby.smartticket.mapper.TicketStockBucketMapper;
 import com.zewbby.smartticket.mapper.TicketStockMapper;
+import com.zewbby.smartticket.mapper.TicketPurchasePlanMapper;
 import com.zewbby.smartticket.mq.PaymentCompensationMessage;
 import com.zewbby.smartticket.service.DomainEventPublisher;
+import com.zewbby.smartticket.service.ArtistRankingService;
 import com.zewbby.smartticket.service.ObservabilityMetricsService;
 import com.zewbby.smartticket.service.PaymentAuditService;
 import com.zewbby.smartticket.service.PaymentCompensationPublisher;
@@ -34,6 +38,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -42,6 +48,8 @@ import java.util.UUID;
 
 @Service
 public class PaymentServiceImpl implements PaymentService {
+
+    private static final Logger log = LoggerFactory.getLogger(PaymentServiceImpl.class);
 
     private static final String MOCK_FAIL_REASON = "模拟支付失败";
 
@@ -67,10 +75,19 @@ public class PaymentServiceImpl implements PaymentService {
     private final StockBucketProperties stockBucketProperties;
 
     @Autowired(required = false)
+    private TicketPurchasePlanMapper ticketPurchasePlanMapper;
+
+    @Autowired(required = false)
     private PaymentCompensationPublisher paymentCompensationPublisher;
 
     @Autowired(required = false)
     private DomainEventPublisher domainEventPublisher;
+
+    @Autowired(required = false)
+    private ArtistRankingService artistRankingService;
+
+    @Autowired(required = false)
+    private ShowMapper showMapper;
 
     @Autowired
     public PaymentServiceImpl(PaymentMapper paymentMapper,
@@ -365,6 +382,7 @@ public class PaymentServiceImpl implements PaymentService {
                 throw new BusinessException(ErrorMessageConstant.STOCK_CONFIRM_FAILED);
             }
         }
+        recordPaidArtist(order);
         observabilityMetricsService.recordOrderPaid();
         publishPaymentPaidEvents(paymentOrder, order);
 
@@ -380,6 +398,23 @@ public class PaymentServiceImpl implements PaymentService {
                 "模拟支付成功回调");
 
         return toPaymentVO(paymentMapper.selectByPaymentNo(paymentOrder.getPaymentNo()));
+    }
+
+    /**
+     * 支付成功才计入付费转化信号。该信号不能影响支付事务，因此所有查询/Redis异常均降级处理。
+     */
+    private void recordPaidArtist(TicketOrder order) {
+        if (artistRankingService == null || showMapper == null || order == null || order.getShowId() == null) {
+            return;
+        }
+        try {
+            ShowInfo show = showMapper.selectShowInfoById(order.getShowId());
+            if (show != null) {
+                artistRankingService.recordPaidOrder(show.getArtist(), null);
+            }
+        } catch (RuntimeException exception) {
+            log.warn("记录艺人付费转化排行榜信号失败，orderId={}", order.getId(), exception);
+        }
     }
 
     /**

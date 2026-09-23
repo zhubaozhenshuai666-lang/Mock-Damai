@@ -94,6 +94,42 @@
 
 > 订单操作后当前不会主动清理演出查询缓存。核验库存变化前，请删除 `session:ticket-categories:{sessionId}` 缓存，或直接查询 MySQL。
 
+## 预约计划与开售抢票
+
+预约计划是用户在开售前准备的填单方案，不是订单、库存预留或价格承诺。开售前可以修改场次、票档、购票数量和观演人；任何修改都会使已完成版本失效，必须重新完成预约。观演人数必须严格等于购票数量。完成预约只保存方案和观演人身份快照，不创建抢票请求、不扣减或占用库存。
+
+完成预约和提交抢票是两个独立操作：`POST /api/purchase-plans/{planId}/complete` 只将当前方案标记为 `READY`；到达场次开售时间后，用户还需要显式调用 `POST /api/purchase-plans/{planId}/submit`。提交时服务端从预约计划中读取已完成的场次、票档、数量和观演人快照，客户端不得提交 `audienceIds`、场次、票档或数量。抢票仍会校验开售窗口、票档和实时库存，预约不保证抢到票或价格不变。
+
+开售前先用 `/api/purchase-plans` 创建计划，再通过 `/spec` 设置场次、票档和数量；可通过 `/audiences` 设置观演人。示例：
+
+```http
+POST /api/purchase-plans/{planId}/complete
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{"version":2}
+```
+
+开售后提交示例：
+
+```http
+POST /api/purchase-plans/{planId}/submit
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{"version":3,"idempotencyToken":"<one-time-token>"}
+```
+
+`submit` 返回异步请求结果及 `requestId`，通过 `GET /api/order-requests/{requestId}` 查询创单状态。未在开售前完成预约、或预约已经过期时，用户按普通抢票流程调用 `POST /api/orders/async`，不会获得预约自动填单。
+
+同一幂等 Token 重复提交时，若异步请求尚未落库，`submit` 会返回预绑定的 `requestId` 和 `SUBMITTING` 状态；此时先查询预约状态，稍后再查询订单请求，不要换 Token 创建第二次抢票。
+
+如果提交期间发生不确定错误，预约计划可能进入 `RECONCILIATION_REQUIRED`。这表示系统正在核对预约计划与异步请求的关联，不代表可以安全地重新创建请求；不要换幂等 Token 盲目重试。先查询 `GET /api/purchase-plans/{planId}` 和对应的订单请求，等待服务端对账后再操作。
+
+只有预约状态已明确为 `FAILED` 时，才可以在开售窗口内获取新的幂等 Token，再调用同一个 `/submit` 接口重试；不存在单独的 `/retry` 接口。
+
+预约计划可见状态为 `DRAFT`、`READY`、`SUBMITTING`、`RECONCILIATION_REQUIRED`、`FAILED`、`ORDER_CREATED`、`CANCELLED` 或 `EXPIRED`。正式订单创建后预约计划保持 `ORDER_CREATED`；之后的支付、取消和超时关闭由正式订单自身管理。
+
 ## 订单接口
 
 ### 创建订单

@@ -215,11 +215,14 @@ public class AdminBusinessServiceImpl implements AdminBusinessService {
         ShowInfo showInfo = requireShow(showId);
         ensureShowMetadataEditable(showInfo);
         validateSessionTime(request.getStartTime(), request.getEndTime());
+        validateSaleWindow(request.getStartTime(), request.getSaleStartTime(), request.getSaleEndTime());
         LocalDateTime now = LocalDateTime.now();
         PerformanceSession session = new PerformanceSession();
         session.setShowId(showId);
         session.setStartTime(request.getStartTime());
         session.setEndTime(request.getEndTime());
+        session.setSaleStartTime(request.getSaleStartTime());
+        session.setSaleEndTime(request.getSaleEndTime());
         session.setStatus(ShowStatusEnum.DRAFT.getCode());
         session.setCreatedAt(now);
         session.setUpdatedAt(now);
@@ -234,10 +237,13 @@ public class AdminBusinessServiceImpl implements AdminBusinessService {
         PerformanceSession existing = requireSession(sessionId);
         ensureSessionMetadataEditable(existing);
         validateSessionTime(request.getStartTime(), request.getEndTime());
+        validateSaleWindow(request.getStartTime(), request.getSaleStartTime(), request.getSaleEndTime());
         PerformanceSession session = new PerformanceSession();
         session.setId(sessionId);
         session.setStartTime(request.getStartTime());
         session.setEndTime(request.getEndTime());
+        session.setSaleStartTime(request.getSaleStartTime());
+        session.setSaleEndTime(request.getSaleEndTime());
         showMapper.updateSession(session);
         invalidateSessionCaches(sessionId, existing.getShowId());
         return requireSession(sessionId);
@@ -250,6 +256,9 @@ public class AdminBusinessServiceImpl implements AdminBusinessService {
         PerformanceSession session = requireSession(sessionId);
         requireShow(session.getShowId());
         ensureSessionNotStarted(session, "场次已开演，禁止发布");
+        ensureSaleWindowNotStarted(session, "场次已开售，禁止发布");
+        validateSessionTime(session.getStartTime(), session.getEndTime());
+        validateSaleWindow(session.getStartTime(), session.getSaleStartTime(), session.getSaleEndTime());
         showMapper.updateSessionStatus(sessionId, ShowStatusEnum.PUBLISHED.getCode());
         invalidateSessionCaches(sessionId, session.getShowId());
         refreshShowRelationCacheIfAvailable();
@@ -575,6 +584,7 @@ public class AdminBusinessServiceImpl implements AdminBusinessService {
             throw new BusinessException("开售期间场次元数据已冻结，禁止修改或下架");
         }
         ensureSessionNotStarted(session, "场次已开演，基础元数据禁止修改或下架");
+        ensureSaleWindowNotStarted(session, "场次已开售，基础元数据禁止修改或下架");
     }
 
     private void ensureTicketCategoryMetadataEditable(TicketCategory ticketCategory) {
@@ -609,6 +619,13 @@ public class AdminBusinessServiceImpl implements AdminBusinessService {
 
     private void ensureSessionNotStarted(PerformanceSession session, String message) {
         if (hasStarted(session, LocalDateTime.now())) {
+            throw new BusinessException(message);
+        }
+    }
+
+    private void ensureSaleWindowNotStarted(PerformanceSession session, String message) {
+        if (session.getSaleStartTime() != null
+                && !session.getSaleStartTime().isAfter(LocalDateTime.now())) {
             throw new BusinessException(message);
         }
     }
@@ -760,6 +777,17 @@ public class AdminBusinessServiceImpl implements AdminBusinessService {
     private void validateSessionTime(LocalDateTime startTime, LocalDateTime endTime) {
         if (startTime == null || endTime == null || !startTime.isBefore(endTime)) {
             throw new BusinessException("场次时间非法");
+        }
+    }
+
+    private void validateSaleWindow(LocalDateTime sessionStartTime,
+                                    LocalDateTime saleStartTime,
+                                    LocalDateTime saleEndTime) {
+        if (saleStartTime == null || saleEndTime == null || !saleStartTime.isBefore(saleEndTime)) {
+            throw new BusinessException("开售时间窗口非法");
+        }
+        if (saleEndTime.isAfter(sessionStartTime)) {
+            throw new BusinessException("开售结束时间必须不晚于场次开始时间");
         }
     }
 

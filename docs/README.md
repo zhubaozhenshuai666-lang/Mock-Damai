@@ -17,8 +17,10 @@ SmartTicket Lite 的文档按用途分目录。运行时依赖的 SQL、接口�
 
 - [项目说明](../README.md)：启动、配置、主链路和验证方式。
 - [系统流程阅读指南](architecture/system-flow-reading-guide.md)：按顺序阅读源码和主链路。
+- [艺人热榜设计](architecture/artist-ranking-design.md)：搜索、行为计分和榜单周期。
 - [领域上下文](../CONTEXT.md)：预约计划、观演人、抢票请求和正式订单的术语边界。
 - [预约与抢票提交分离 ADR](adr/0001-预约与抢票提交分离.md)：已采纳的架构决策。
+- [预约计划接口样例](api/purchase-plan.http)：从观演人选择到开售后提交抢票。
 - [API 调试索引](api/README.md)：当前接口和历史兼容样例的分类入口。
 - [正式 JMeter 压测计划](performance/formal-jmeter-pressure-test-plan.md)：正式压测前的环境与执行要求。
 - [测试目录说明](../src/test/README.md)：测试分类、资源依赖和运行边界。

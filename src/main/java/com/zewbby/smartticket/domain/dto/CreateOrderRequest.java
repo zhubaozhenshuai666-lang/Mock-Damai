@@ -3,9 +3,12 @@ package com.zewbby.smartticket.domain.dto;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+
+import java.util.List;
 
 @Data
 @NoArgsConstructor
@@ -35,6 +38,18 @@ public class CreateOrderRequest {
     private String idempotencyToken;
 
     private String admissionToken;
+
+    /** 预约抢票链路预先生成的请求 ID；普通下单由 OrderService 自行生成。 */
+    @JsonIgnore
+    private String requestId;
+
+    /** 预约购买计划内部字段，仅由服务端填充，客户端不得直接改变。 */
+    @JsonIgnore
+    private Long purchasePlanId;
+
+    /** 预约计划已校验的观演人，仅用于异步创单链路传递计划关联。 */
+    @JsonIgnore
+    private List<Long> selectedAudienceIds;
 
     public CreateOrderRequest(Long userId,
                               Long showId,

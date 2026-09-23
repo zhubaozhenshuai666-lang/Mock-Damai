@@ -41,7 +41,13 @@ public class WebMvcConfig implements WebMvcConfigurer {
                         "/api/order-requests/**",
                         "/api/payments/**",
                         "/api/auth/logout",
-                        "/api/users/**",
+                        "/api/shows/**",
+                        "/api/sessions/**",
+                        "/api/search/**",
+                        "/api/audiences",
+                        "/api/audiences/**",
+                        "/api/purchase-plans",
+                        "/api/purchase-plans/**",
                         "/api/users/me",
                         "/api/users/me/orders",
                         "/api/users/*/orders",
@@ -51,8 +57,6 @@ public class WebMvcConfig implements WebMvcConfigurer {
                 .excludePathPatterns(
                         "/api/auth/register",
                         "/api/auth/login",
-                        "/api/shows/**",
-                        "/api/sessions/**",
                         "/error",
                         "/actuator/**"
                 );
@@ -61,6 +65,8 @@ public class WebMvcConfig implements WebMvcConfigurer {
                 .addPathPatterns("/api/admin/**");
 
         registry.addInterceptor(rateLimitInterceptor)
-                .addPathPatterns("/api/orders/**", "/api/order-requests/**", "/api/payments/**");
+                .addPathPatterns("/api/orders/**", "/api/order-requests/**", "/api/payments/**",
+                        "/api/search/**", "/api/rankings/**", "/api/audiences", "/api/audiences/**",
+                        "/api/purchase-plans", "/api/purchase-plans/**");
     }
 }
