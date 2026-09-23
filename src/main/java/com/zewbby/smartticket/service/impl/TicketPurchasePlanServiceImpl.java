@@ -37,7 +37,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -59,6 +62,8 @@ public class TicketPurchasePlanServiceImpl implements TicketPurchasePlanService 
     private final ShowRelationCacheService showRelationCacheService;
     private final OrderService orderService;
     private final PurchasePlanProperties purchasePlanProperties;
+    private final TransactionTemplate submissionTransaction;
+    private final TransactionTemplate withoutTransaction;
 
     @Autowired(required = false)
     private ArtistRankingService artistRankingService;
@@ -70,7 +75,8 @@ public class TicketPurchasePlanServiceImpl implements TicketPurchasePlanService 
                                          TicketCategoryMapper ticketCategoryMapper,
                                          ShowRelationCacheService showRelationCacheService,
                                          OrderService orderService,
-                                         PurchasePlanProperties purchasePlanProperties) {
+                                         PurchasePlanProperties purchasePlanProperties,
+                                         PlatformTransactionManager transactionManager) {
         this.planMapper = planMapper;
         this.planAudienceMapper = planAudienceMapper;
         this.audiencePersonMapper = audiencePersonMapper;
@@ -79,6 +85,10 @@ public class TicketPurchasePlanServiceImpl implements TicketPurchasePlanService 
         this.showRelationCacheService = showRelationCacheService;
         this.orderService = orderService;
         this.purchasePlanProperties = purchasePlanProperties;
+        this.submissionTransaction = new TransactionTemplate(transactionManager);
+        this.submissionTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.withoutTransaction = new TransactionTemplate(transactionManager);
+        this.withoutTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_NOT_SUPPORTED);
     }
 
     @Override
@@ -229,12 +239,24 @@ public class TicketPurchasePlanServiceImpl implements TicketPurchasePlanService 
     }
 
     @Override
-    @Transactional(noRollbackFor = RuntimeException.class)
     public OrderRequestVO submit(Long planId, SubmitPurchasePlanRequest request) {
+        // 下单服务拥有自己的事务；预约请求绑定和异常状态必须各自独立提交。
+        return withoutTransaction.execute(status -> submitWithoutTransaction(planId, request));
+    }
+
+    private OrderRequestVO submitWithoutTransaction(Long planId, SubmitPurchasePlanRequest request) {
         ensureEnabled();
         Long userId = UserContext.requireUserId();
         TicketPurchasePlan plan = getOwnedPlan(planId);
         if (isExistingSubmission(plan, request.getIdempotencyToken())) {
+            if (PurchasePlanStatusEnum.SUBMITTING.getCode().equals(plan.getStatus())) {
+                // 请求 ID 已持久化，但异步请求行可能尚未创建；重复点击仍返回可查询的 ID。
+                OrderRequestVO pending = new OrderRequestVO();
+                pending.setRequestId(plan.getOrderRequestId());
+                pending.setStatus(plan.getStatus());
+                pending.setCreatedAt(plan.getSubmittedAt());
+                return pending;
+            }
             return orderService.getOrderRequestResult(plan.getOrderRequestId());
         }
         if (PurchasePlanStatusEnum.RECONCILIATION_REQUIRED.getCode().equals(plan.getStatus())) {
@@ -257,18 +279,20 @@ public class TicketPurchasePlanServiceImpl implements TicketPurchasePlanService 
 
         LocalDateTime now = LocalDateTime.now();
         String requestId = "PLANREQ-" + planId + "-" + UUID.randomUUID().toString().replace("-", "");
-        if (planMapper.beginSubmitting(
-                planId,
-                userId,
-                request.getVersion(),
-                PurchasePlanStatusEnum.SUBMITTING.getCode(),
-                request.getIdempotencyToken(),
-                requestId,
-                now,
-                now,
-                now) != 1) {
-            throw new BusinessException("预约计划已提交或已被修改，请刷新后重试");
-        }
+        submissionTransaction.executeWithoutResult(status -> {
+            if (planMapper.beginSubmitting(
+                    planId,
+                    userId,
+                    request.getVersion(),
+                    PurchasePlanStatusEnum.SUBMITTING.getCode(),
+                    request.getIdempotencyToken(),
+                    requestId,
+                    now,
+                    now,
+                    now) != 1) {
+                throw new BusinessException("预约计划已提交或已被修改，请刷新后重试");
+            }
+        });
 
         CreateOrderRequest orderRequest = new CreateOrderRequest(
                 userId,
@@ -291,27 +315,27 @@ public class TicketPurchasePlanServiceImpl implements TicketPurchasePlanService 
             LocalDateTime failedAt = LocalDateTime.now();
             String reason = exception.getMessage() == null ? "异步创单结果未知，等待对账" : exception.getMessage();
             if (exception instanceof AsyncOrderSubmissionRejectedException) {
-                int failedRows = planMapper.markFailed(
-                        planId, requestId, PurchasePlanStatusEnum.FAILED.getCode(), reason, failedAt);
+                int failedRows = submissionTransaction.execute(status -> planMapper.markFailed(
+                        planId, requestId, PurchasePlanStatusEnum.FAILED.getCode(), reason, failedAt));
                 if (failedRows != 1) {
-                    int reconciliationRows = planMapper.markReconciliationRequired(
+                    int reconciliationRows = submissionTransaction.execute(status -> planMapper.markReconciliationRequired(
                             planId,
                             requestId,
                             PurchasePlanStatusEnum.RECONCILIATION_REQUIRED.getCode(),
                             reason,
-                            LocalDateTime.now());
+                            LocalDateTime.now()));
                     if (reconciliationRows != 1) {
                         LOGGER.error("预约计划同步拒绝后状态收敛失败，planId={}, requestId={}",
                                 planId, requestId, exception);
                     }
                 }
             } else {
-                int rows = planMapper.markReconciliationRequired(
+                int rows = submissionTransaction.execute(status -> planMapper.markReconciliationRequired(
                         planId,
                         requestId,
                         PurchasePlanStatusEnum.RECONCILIATION_REQUIRED.getCode(),
                         reason,
-                        failedAt);
+                        failedAt));
                 if (rows != 1) {
                     LOGGER.error("预约计划进入对账状态失败，planId={}, requestId={}", planId, requestId, exception);
                 }
@@ -340,15 +364,6 @@ public class TicketPurchasePlanServiceImpl implements TicketPurchasePlanService 
         } catch (RuntimeException exception) {
             LOGGER.warn("记录艺人购票意向排行榜信号失败，planId={}", plan.getId(), exception);
         }
-    }
-
-    @Override
-    public TicketPurchasePlanVO retryFailed(Long planId, Integer version) {
-        TicketPurchasePlan plan = getOwnedPlan(planId);
-        if (!PurchasePlanStatusEnum.FAILED.getCode().equals(plan.getStatus())) {
-            throw new BusinessException("只有失败的预约计划才能重试");
-        }
-        return toVO(plan);
     }
 
     @Override

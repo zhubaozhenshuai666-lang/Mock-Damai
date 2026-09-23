@@ -1,12 +1,12 @@
 # 预约计划模块交接记录
 
-更新时间：2026-09-23
+更新时间：2026-09-24
 当前分支：`codex/remaining-workspace-features`
 远端：`origin`（GitHub: `zhubaozhenshuai666-lang/smart-ticket-lite`）
 
 ## 交接目标
 
-本记录起初用于预约计划模块的中途交接。后续工作区已扩展到观演人、异步抢票集成、演出搜索和艺人热榜；这些相关代码、文档、SQL 与测试现归入 `codex/remaining-workspace-features`。JDK 21 下已运行预约/订单及搜索/热榜聚焦测试。没有运行全量 Maven 测试，也没有运行压测。
+本记录起初用于预约计划模块的中途交接。后续工作区已扩展到观演人、异步抢票集成、演出搜索和艺人热榜；这些相关代码、文档、SQL 与测试现归入 `codex/remaining-workspace-features`。JDK 21 下已运行全量 Maven 测试；本机没有 Docker，Testcontainers 集成测试被跳过。没有运行压测。
 
 本分支不应被推送或合并到 `main` / `master`；本记录里“提交到当前分支”的旧操作要求已被上述范围取代。
 
@@ -40,13 +40,13 @@
 
 已执行验证：JDK 21 下 `OrderServiceImplTest`、`TicketPurchasePlanServiceImplTest`、`PurchasePlanReconciliationServiceImplTest`、两类预约扫描任务、`AsyncCreateOrderConsumerTest`、`MapperSqlContractTest`、`AdminBusinessServiceImplTest`、`ShowServiceImplTest` 聚焦测试通过；异常消费者日志属于预期失败路径。`ArtistRankingServiceImplTest` 和 `ShowSearchServiceImplTest` 的聚焦测试也通过。代码提交后再次运行了 `git diff --check`。
 
-代码还已发现两个非本锚点问题，留待后续处理：`AdminBusinessServiceImpl.publishSession()` 应重新校验持久化开售窗口边界；`POST /api/purchase-plans/{id}/retry` 当前只返回原预约状态，不触发重试，真实入口是 `/submit`。提交本身不表示这些问题已解决。
+2026-09-24 已补齐后续发现的问题：`publishSession()` 重新校验持久化的场次与开售窗口边界；移除只返回旧状态的 `/retry` 路由，失败预约仍通过新的幂等 Token 调用 `/submit`；预约请求预绑定和异常状态各自使用独立事务，异步下单事务回滚不再撤销对账状态；Redis `DUPLICATE` 按结果不确定处理；同一 Token 在请求行尚未落库时返回预绑定 ID 和 `SUBMITTING` 状态。相应服务、事务边界和控制器测试已补充。
 
 ### 后续验证建议
 
 - 后续如修改此处状态转换，再检查服务测试覆盖：下单服务同步拒绝时写入 `FAILED`，调用已开始但库存/请求结果不确定时仍写入 `RECONCILIATION_REQUIRED`，预约状态更新行数错误不得静默忽略。
 - 失败预约保留原有方案完成版本，能用新的幂等 token 通过 `POST /submit` 重试；对账状态不得盲目提交。
-- 未运行全量 `mvn test`；本模块不要求 JMeter。
+- 全量 `mvn test` 已执行；本模块不要求 JMeter。
 
 ## 工作区及提交边界
 
@@ -56,10 +56,8 @@
 
 本次提交不要推送到 `main` / `master`，也不要把剩余安全审查文件混入本功能提交。
 
-## 尚未验证/暂不承诺
+## 验证边界
 
-- 本交接点尚未运行 JDK 21 全量 `mvn test`；已运行并通过上述预约/订单聚焦测试。
-- 完整代码审查未完成，本次按用户要求暂停。此前局部只读核对提出两项需下次先验证的风险：`submitAsyncOrder()` 与预约 `submit()` 的 Spring REQUIRED 事务嵌套可能使未知运行时异常时的对账状态一并回滚；Redis `DUPLICATE` 返回值可能被误当作“确定未扣库存”的安全失败。尚未补充事务代理测试或修复，不应把它们当作已排除的问题。
-- 仍需确认预约对账缺失 `orderRequestId` 的保守告警路径是否足够；不要按计划 ID 不精确推进。
-- `AdminBusinessServiceImpl.publishSession()` 持久化窗口边界复校验、无效 `/retry` 路由清理，以及预约端点 API/集成测试仍未处理。
-- 当前提交不包含上述两个待安全审查文件；交接状态以最新 Git 提交和实际代码为准。
+- JDK 21 全量 `mvn test`：405 个测试，0 失败，5 个 Testcontainers 集成测试因没有 Docker 被跳过。预约提交事务边界通过可记录提交/回滚顺序的聚焦测试验证；预约端点通过 MockMvc 验证 `/submit` 与已移除的 `/retry`。
+- 缺失 `orderRequestId` 的异常旧数据继续保守告警，禁止按计划 ID 推断异步请求并自动重试；需要运行环境中的数据核查。
+- 本次提交不包含上述两个待安全审查文件；交接状态以最新 Git 提交和实际代码为准。

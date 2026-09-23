@@ -255,9 +255,10 @@ public class AdminBusinessServiceImpl implements AdminBusinessService {
     public void publishSession(Long sessionId) {
         PerformanceSession session = requireSession(sessionId);
         requireShow(session.getShowId());
-        validateConfiguredSaleWindow(session);
         ensureSessionNotStarted(session, "场次已开演，禁止发布");
         ensureSaleWindowNotStarted(session, "场次已开售，禁止发布");
+        validateSessionTime(session.getStartTime(), session.getEndTime());
+        validateSaleWindow(session.getStartTime(), session.getSaleStartTime(), session.getSaleEndTime());
         showMapper.updateSessionStatus(sessionId, ShowStatusEnum.PUBLISHED.getCode());
         invalidateSessionCaches(sessionId, session.getShowId());
         refreshShowRelationCacheIfAvailable();
@@ -626,12 +627,6 @@ public class AdminBusinessServiceImpl implements AdminBusinessService {
         if (session.getSaleStartTime() != null
                 && !session.getSaleStartTime().isAfter(LocalDateTime.now())) {
             throw new BusinessException(message);
-        }
-    }
-
-    private void validateConfiguredSaleWindow(PerformanceSession session) {
-        if (session.getSaleStartTime() == null || session.getSaleEndTime() == null) {
-            throw new BusinessException("场次未配置开售时间窗口");
         }
     }
 

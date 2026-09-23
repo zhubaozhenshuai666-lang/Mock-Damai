@@ -414,6 +414,34 @@ class AdminBusinessServiceImplTest {
     }
 
     @Test
+    void publishSessionRejectsPersistedSaleWindowAfterPerformanceStart() {
+        PerformanceSession session = session(ShowStatusEnum.DRAFT.getCode());
+        session.setSaleEndTime(session.getStartTime().plusMinutes(1));
+        when(showMapper.selectSessionById(1L)).thenReturn(session);
+        when(showMapper.selectShowInfoById(1L)).thenReturn(showInfo(ShowStatusEnum.DRAFT.getCode()));
+
+        assertThatThrownBy(() -> service.publishSession(1L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("开售结束时间必须不晚于场次开始时间");
+
+        verify(showMapper, never()).updateSessionStatus(1L, ShowStatusEnum.PUBLISHED.getCode());
+    }
+
+    @Test
+    void publishSessionRejectsPersistedReverseSaleWindow() {
+        PerformanceSession session = session(ShowStatusEnum.DRAFT.getCode());
+        session.setSaleStartTime(session.getSaleEndTime().plusMinutes(1));
+        when(showMapper.selectSessionById(1L)).thenReturn(session);
+        when(showMapper.selectShowInfoById(1L)).thenReturn(showInfo(ShowStatusEnum.DRAFT.getCode()));
+
+        assertThatThrownBy(() -> service.publishSession(1L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("开售时间窗口非法");
+
+        verify(showMapper, never()).updateSessionStatus(1L, ShowStatusEnum.PUBLISHED.getCode());
+    }
+
+    @Test
     void publishSessionInvalidatesPublicShowCaches() {
         PerformanceSession session = session(ShowStatusEnum.DRAFT.getCode());
         session.setId(10L);

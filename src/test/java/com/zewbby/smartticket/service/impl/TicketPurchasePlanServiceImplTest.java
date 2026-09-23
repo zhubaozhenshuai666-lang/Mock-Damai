@@ -12,6 +12,7 @@ import com.zewbby.smartticket.domain.entity.PerformanceSession;
 import com.zewbby.smartticket.domain.entity.ShowInfo;
 import com.zewbby.smartticket.domain.entity.TicketPurchasePlan;
 import com.zewbby.smartticket.domain.entity.TicketPurchasePlanAudience;
+import com.zewbby.smartticket.domain.vo.OrderRequestVO;
 import com.zewbby.smartticket.enums.ShowStatusEnum;
 import com.zewbby.smartticket.enums.PurchasePlanStatusEnum;
 import com.zewbby.smartticket.mapper.AudiencePersonMapper;
@@ -25,11 +26,20 @@ import com.zewbby.smartticket.service.ShowRelationCacheService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.AbstractPlatformTransactionManager;
+import org.springframework.transaction.support.DefaultTransactionStatus;
+import org.springframework.transaction.support.SimpleTransactionStatus;
+import org.springframework.transaction.support.TransactionTemplate;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -38,6 +48,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.times;
 
 class TicketPurchasePlanServiceImplTest {
 
@@ -48,6 +59,7 @@ class TicketPurchasePlanServiceImplTest {
     private TicketCategoryMapper ticketCategoryMapper;
     private ShowRelationCacheService showRelationCacheService;
     private OrderService orderService;
+    private PlatformTransactionManager transactionManager;
     private TicketPurchasePlanServiceImpl service;
 
     @BeforeEach
@@ -59,6 +71,8 @@ class TicketPurchasePlanServiceImplTest {
         ticketCategoryMapper = mock(TicketCategoryMapper.class);
         showRelationCacheService = mock(ShowRelationCacheService.class);
         orderService = mock(OrderService.class);
+        transactionManager = mock(PlatformTransactionManager.class);
+        when(transactionManager.getTransaction(any())).thenAnswer(invocation -> new SimpleTransactionStatus());
         service = new TicketPurchasePlanServiceImpl(
                 planMapper,
                 planAudienceMapper,
@@ -67,7 +81,8 @@ class TicketPurchasePlanServiceImplTest {
                 ticketCategoryMapper,
                 showRelationCacheService,
                 orderService,
-                new PurchasePlanProperties());
+                new PurchasePlanProperties(),
+                transactionManager);
         UserContext.setUserId(1L);
     }
 
@@ -205,6 +220,7 @@ class TicketPurchasePlanServiceImplTest {
         verify(planMapper).markFailed(eq(1L), any(), eq(PurchasePlanStatusEnum.FAILED.getCode()),
                 eq("重复提交"), any());
         verify(planMapper, never()).markReconciliationRequired(anyLong(), any(), any(), any(), any());
+        verifySubmissionTransactions();
     }
 
     @Test
@@ -227,6 +243,96 @@ class TicketPurchasePlanServiceImplTest {
         verify(planMapper).markReconciliationRequired(eq(1L), any(),
                 eq(PurchasePlanStatusEnum.RECONCILIATION_REQUIRED.getCode()), any(), any());
         verify(planMapper, never()).markFailed(anyLong(), any(), any(), any(), any());
+        verifySubmissionTransactions();
+    }
+
+    @Test
+    void sameTokenReturnsPreboundRequestIdBeforeRequestRowExists() {
+        TicketPurchasePlan plan = submittablePlan(PurchasePlanStatusEnum.SUBMITTING.getCode());
+        plan.setOrderRequestId("PLANREQ-1");
+        plan.setIdempotencyToken("same-token");
+        plan.setSubmittedAt(LocalDateTime.now());
+        when(planMapper.selectByIdAndUserId(1L, 1L)).thenReturn(plan);
+
+        OrderRequestVO result = service.submit(1L, new SubmitPurchasePlanRequest(4, "same-token", null));
+
+        assertThat(result.getRequestId()).isEqualTo("PLANREQ-1");
+        assertThat(result.getStatus()).isEqualTo(PurchasePlanStatusEnum.SUBMITTING.getCode());
+        verify(orderService, never()).getOrderRequestResult(any());
+        verify(planMapper, never()).beginSubmitting(any(), any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void unknownInnerTransactionRollbackDoesNotUndoPlanReconciliation() {
+        RecordingTransactionManager manager = new RecordingTransactionManager();
+        service = new TicketPurchasePlanServiceImpl(planMapper, planAudienceMapper, audiencePersonMapper,
+                showMapper, ticketCategoryMapper, showRelationCacheService, orderService,
+                new PurchasePlanProperties(), manager);
+        TicketPurchasePlan plan = submittablePlan(PurchasePlanStatusEnum.READY.getCode());
+        when(planMapper.selectByIdAndUserId(1L, 1L)).thenReturn(plan);
+        when(showMapper.selectSessionById(10L)).thenReturn(saleWindowOpenSession());
+        when(planAudienceMapper.selectByPlanIdAndSelectionType(1L, "SELECTED"))
+                .thenReturn(List.of(planAudience(101L, 1)));
+        when(planMapper.beginSubmitting(eq(1L), eq(1L), eq(4), any(), any(), any(), any(), any(), any()))
+                .thenReturn(1);
+        when(planMapper.markReconciliationRequired(eq(1L), any(), any(), any(), any())).thenReturn(1);
+        when(orderService.submitAsyncOrder(any())).thenAnswer(invocation ->
+                new TransactionTemplate(manager).execute(status -> {
+                    throw new IllegalStateException("订单事务回滚");
+                }));
+
+        assertThatThrownBy(() -> service.submit(1L, new SubmitPurchasePlanRequest(4, "token-2", null)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("订单事务回滚");
+
+        assertThat(manager.events).containsExactly("begin", "commit", "begin", "rollback", "begin", "commit");
+        verify(planMapper).markReconciliationRequired(eq(1L), any(),
+                eq(PurchasePlanStatusEnum.RECONCILIATION_REQUIRED.getCode()), any(), any());
+    }
+
+    private static final class RecordingTransactionManager extends AbstractPlatformTransactionManager {
+        private final ThreadLocal<Boolean> active = ThreadLocal.withInitial(() -> false);
+        private final List<String> events = new ArrayList<>();
+
+        @Override
+        protected Object doGetTransaction() {
+            return active.get();
+        }
+
+        @Override
+        protected boolean isExistingTransaction(Object transaction) {
+            return Boolean.TRUE.equals(transaction);
+        }
+
+        @Override
+        protected void doBegin(Object transaction, TransactionDefinition definition) {
+            active.set(true);
+            events.add("begin");
+        }
+
+        @Override
+        protected void doCommit(DefaultTransactionStatus status) {
+            events.add("commit");
+            active.remove();
+        }
+
+        @Override
+        protected void doRollback(DefaultTransactionStatus status) {
+            events.add("rollback");
+            active.remove();
+        }
+    }
+
+    private void verifySubmissionTransactions() {
+        ArgumentCaptor<TransactionDefinition> definitions = ArgumentCaptor.forClass(TransactionDefinition.class);
+        verify(transactionManager, times(3)).getTransaction(definitions.capture());
+        assertThat(definitions.getAllValues())
+                .extracting(TransactionDefinition::getPropagationBehavior)
+                .containsExactly(TransactionDefinition.PROPAGATION_NOT_SUPPORTED,
+                        TransactionDefinition.PROPAGATION_REQUIRES_NEW,
+                        TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        verify(transactionManager, times(2)).commit(any());
+        verify(transactionManager).rollback(any());
     }
 
     private TicketPurchasePlan editablePlan(String status) {

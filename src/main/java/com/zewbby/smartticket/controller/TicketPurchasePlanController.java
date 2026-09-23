@@ -85,13 +85,6 @@ public class TicketPurchasePlanController {
         return ApiResponse.success(ticketPurchasePlanService.submit(planId, request));
     }
 
-    @PostMapping("/{planId}/retry")
-    public ApiResponse<TicketPurchasePlanVO> retry(
-            @PathVariable Long planId,
-            @Valid @RequestBody ConfirmPurchasePlanRequest request) {
-        return ApiResponse.success(ticketPurchasePlanService.retryFailed(planId, request.getVersion()));
-    }
-
     @PostMapping("/{planId}/cancel")
     public ApiResponse<Void> cancel(@PathVariable Long planId,
                                     @Valid @RequestBody ConfirmPurchasePlanRequest request) {

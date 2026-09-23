@@ -119,7 +119,11 @@ Content-Type: application/json
 
 `submit` 返回异步请求结果及 `requestId`，通过 `GET /api/order-requests/{requestId}` 查询创单状态。未在开售前完成预约、或预约已经过期时，用户按普通抢票流程调用 `POST /api/orders/async`，不会获得预约自动填单。
 
+同一幂等 Token 重复提交时，若异步请求尚未落库，`submit` 会返回预绑定的 `requestId` 和 `SUBMITTING` 状态；此时先查询预约状态，稍后再查询订单请求，不要换 Token 创建第二次抢票。
+
 如果提交期间发生不确定错误，预约计划可能进入 `RECONCILIATION_REQUIRED`。这表示系统正在核对预约计划与异步请求的关联，不代表可以安全地重新创建请求；不要换幂等 Token 盲目重试。先查询 `GET /api/purchase-plans/{planId}` 和对应的订单请求，等待服务端对账后再操作。
+
+只有预约状态已明确为 `FAILED` 时，才可以在开售窗口内获取新的幂等 Token，再调用同一个 `/submit` 接口重试；不存在单独的 `/retry` 接口。
 
 预约计划可见状态为 `DRAFT`、`READY`、`SUBMITTING`、`RECONCILIATION_REQUIRED`、`FAILED`、`ORDER_CREATED`、`CANCELLED` 或 `EXPIRED`。正式订单创建后预约计划保持 `ORDER_CREATED`；之后的支付、取消和超时关闭由正式订单自身管理。
 

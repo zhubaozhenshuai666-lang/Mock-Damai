@@ -626,7 +626,8 @@ public class OrderServiceImpl implements OrderService {
         );
         RedisStockDeductResult deductResult = deductResponse.getResult();
         if (!deductResult.isSuccess()) {
-            submitState.redisDeductionRejected = true;
+            // DUPLICATE 表示同一请求曾预扣成功，不能当作确定无库存副作用。
+            submitState.redisDeductionRejected = deductResult != RedisStockDeductResult.DUPLICATE;
             observabilityMetricsService.recordAsyncOrderRequestFailed();
             throw new BusinessException(toPreDeductFailMessage(deductResult));
         }

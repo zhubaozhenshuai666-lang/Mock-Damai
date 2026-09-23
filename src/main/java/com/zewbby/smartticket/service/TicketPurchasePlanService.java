@@ -30,7 +30,5 @@ public interface TicketPurchasePlanService {
 
     OrderRequestVO submit(Long planId, SubmitPurchasePlanRequest request);
 
-    TicketPurchasePlanVO retryFailed(Long planId, Integer version);
-
     void cancel(Long planId, Integer version);
 }
