@@ -43,6 +43,16 @@ class MapperSqlContractTest {
     }
 
     @Test
+    void publicTicketCategorySqlRequiresPublishedShowAndSession() throws Exception {
+        String xml = Files.readString(Path.of("src/main/resources/mapper/ShowMapper.xml"));
+
+        assertThat(xml).contains("JOIN performance_session ps ON ps.id = tc.session_id");
+        assertThat(xml).contains("JOIN show_info si ON si.id = ps.show_id");
+        assertThat(xml).contains("AND ps.status = 'PUBLISHED'");
+        assertThat(xml).contains("AND si.status = 'PUBLISHED'");
+    }
+
+    @Test
     void adminBusinessSqlContainsResourceStatusesAndUserSidePublishedFilters() throws Exception {
         String schema = Files.readString(Path.of("docs/sql/schema.sql"));
         String showXml = Files.readString(Path.of("src/main/resources/mapper/ShowMapper.xml"));

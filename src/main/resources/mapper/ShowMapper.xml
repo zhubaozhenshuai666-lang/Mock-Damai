@@ -133,9 +133,13 @@
             ts.total_stock,
             ts.available_stock
         FROM ticket_category tc
+        JOIN performance_session ps ON ps.id = tc.session_id
+        JOIN show_info si ON si.id = ps.show_id
         LEFT JOIN ticket_stock ts ON ts.ticket_category_id = tc.id
         WHERE tc.session_id = #{sessionId}
           AND tc.status = 'PUBLISHED'
+          AND ps.status = 'PUBLISHED'
+          AND si.status = 'PUBLISHED'
         ORDER BY tc.price ASC
     </select>
 
