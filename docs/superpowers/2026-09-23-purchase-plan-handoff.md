@@ -6,7 +6,7 @@
 
 ## 交接目标
 
-本记录起初用于预约计划模块的中途交接。后续工作区已扩展到观演人、异步抢票集成、演出搜索和艺人热榜；这些相关代码、文档、SQL 与测试现在归入 `codex/remaining-workspace-features`。本次按要求没有运行测试，因此只能确认文件已提交，不能据此声称功能通过验证。
+本记录起初用于预约计划模块的中途交接。后续工作区已扩展到观演人、异步抢票集成、演出搜索和艺人热榜；这些相关代码、文档、SQL 与测试现归入 `codex/remaining-workspace-features`。JDK 21 下已运行预约/订单及搜索/热榜聚焦测试。没有运行全量 Maven 测试，也没有运行压测。
 
 本分支不应被推送或合并到 `main` / `master`；本记录里“提交到当前分支”的旧操作要求已被上述范围取代。
 
@@ -30,21 +30,23 @@
 - 增加按场次开售窗口过期的扫描，以及预约/抢票请求对账服务和扫描任务。
 - 收敛 Mapper 更新条件、订单请求 ID 匹配条件和 XML 时间比较语法。
 - README 和 API 示例已调整为“先完成预约，开售后提交”，不再在提交请求中传观演人列表。
-- 本次纳入了对应的预约服务、Mapper、过期扫描、异步消费者和预约对账测试；按要求没有运行测试。
+- 本次纳入了对应的预约服务、Mapper、过期扫描、异步消费者和预约对账测试。
 
 ## 已处理锚点：同步拒绝后的安全状态收敛
 
 当前实现已区分确定同步拒绝与结果不确定两类异常：
 
-`TicketPurchasePlanServiceImpl.submit()` 对 `AsyncOrderSubmissionRejectedException` 收敛到 `FAILED`；其他无法确认请求或库存副作用的异常仍进入 `RECONCILIATION_REQUIRED`。相应分支测试已加入 `TicketPurchasePlanServiceImplTest`，但本次没有执行测试，后续验证时仍须检查异常分类和状态更新行数行为。
+`TicketPurchasePlanServiceImpl.submit()` 对 `AsyncOrderSubmissionRejectedException` 收敛到 `FAILED`；其他无法确认请求或库存副作用的异常仍进入 `RECONCILIATION_REQUIRED`。相应分支测试已加入 `TicketPurchasePlanServiceImplTest` 并通过聚焦测试。
+
+已执行验证：JDK 21 下 `OrderServiceImplTest`、`TicketPurchasePlanServiceImplTest`、`PurchasePlanReconciliationServiceImplTest`、两类预约扫描任务、`AsyncCreateOrderConsumerTest`、`MapperSqlContractTest`、`AdminBusinessServiceImplTest`、`ShowServiceImplTest` 聚焦测试通过；异常消费者日志属于预期失败路径。`ArtistRankingServiceImplTest` 和 `ShowSearchServiceImplTest` 的聚焦测试也通过。代码提交后再次运行了 `git diff --check`。
 
 代码还已发现两个非本锚点问题，留待后续处理：`AdminBusinessServiceImpl.publishSession()` 应重新校验持久化开售窗口边界；`POST /api/purchase-plans/{id}/retry` 当前只返回原预约状态，不触发重试，真实入口是 `/submit`。提交本身不表示这些问题已解决。
 
 ### 后续验证建议
 
-- 检查服务测试覆盖：下单服务同步拒绝时写入 `FAILED`，调用已开始但库存/请求结果不确定时仍写入 `RECONCILIATION_REQUIRED`，预约状态更新行数错误不得静默忽略。
+- 后续如修改此处状态转换，再检查服务测试覆盖：下单服务同步拒绝时写入 `FAILED`，调用已开始但库存/请求结果不确定时仍写入 `RECONCILIATION_REQUIRED`，预约状态更新行数错误不得静默忽略。
 - 失败预约保留原有方案完成版本，能用新的幂等 token 通过 `POST /submit` 重试；对账状态不得盲目提交。
-- 在后续验证安排允许时运行相关聚焦测试和 `git diff --check`；本模块不要求 JMeter。
+- 未运行全量 `mvn test`；本模块不要求 JMeter。
 
 ## 工作区及提交边界
 
@@ -56,7 +58,8 @@
 
 ## 尚未验证/暂不承诺
 
-- 本交接点尚未运行 JDK 21 全量 `mvn test`。
-- 仍需完成独立代码审查并确认预约对账缺失 `orderRequestId` 的保守告警路径是否足够；本次锚点不应擅自增加按计划 ID 的不精确推进。
+- 本交接点尚未运行 JDK 21 全量 `mvn test`；已运行并通过上述预约/订单聚焦测试。
+- 完整代码审查未完成，本次按用户要求暂停。此前局部只读核对提出两项需下次先验证的风险：`submitAsyncOrder()` 与预约 `submit()` 的 Spring REQUIRED 事务嵌套可能使未知运行时异常时的对账状态一并回滚；Redis `DUPLICATE` 返回值可能被误当作“确定未扣库存”的安全失败。尚未补充事务代理测试或修复，不应把它们当作已排除的问题。
+- 仍需确认预约对账缺失 `orderRequestId` 的保守告警路径是否足够；不要按计划 ID 不精确推进。
 - `AdminBusinessServiceImpl.publishSession()` 持久化窗口边界复校验、无效 `/retry` 路由清理，以及预约端点 API/集成测试仍未处理。
-- 当前提交未执行测试，也不包含上述两个待安全审查文件；交接状态以最新 Git 提交和实际代码为准。
+- 当前提交不包含上述两个待安全审查文件；交接状态以最新 Git 提交和实际代码为准。
