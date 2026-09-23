@@ -17,9 +17,10 @@ INSERT INTO show_info (
 );
 
 INSERT INTO performance_session (
-    id, show_id, start_time, end_time, status, created_at, updated_at
+    id, show_id, start_time, end_time, sale_start_time, sale_end_time, status, created_at, updated_at
 ) VALUES (
-    1, 1, '2030-01-01 20:00:00', '2030-01-01 22:00:00', 'PUBLISHED', NOW(), NOW()
+    1, 1, '2030-01-01 20:00:00', '2030-01-01 22:00:00',
+    '2029-12-20 10:00:00', '2030-01-01 19:00:00', 'PUBLISHED', NOW(), NOW()
 );
 
 INSERT INTO ticket_category (

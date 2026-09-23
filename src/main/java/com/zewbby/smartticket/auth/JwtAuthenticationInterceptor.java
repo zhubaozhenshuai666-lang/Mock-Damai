@@ -36,6 +36,9 @@ public class JwtAuthenticationInterceptor implements HandlerInterceptor {
             //提取并初步校验 Token 格式
             String authorization = request.getHeader(AUTHORIZATION_HEADER);
             if (authorization == null || authorization.isBlank()) {
+                if (isOptionalAuthenticationRequest(request)) {
+                    return true;
+                }
                 throw new BusinessException(401, ErrorMessageConstant.UNAUTHORIZED);
             }
             //如果不以bear开头的话就抛无效异常
@@ -73,5 +76,13 @@ public class JwtAuthenticationInterceptor implements HandlerInterceptor {
     private boolean isLogoutRequest(HttpServletRequest request) {
         return "POST".equalsIgnoreCase(request.getMethod())
                 && "/api/auth/logout".equals(request.getRequestURI());
+    }
+
+    private boolean isOptionalAuthenticationRequest(HttpServletRequest request) {
+        String uri = request.getRequestURI();
+        return "/api/shows".equals(uri)
+                || uri.startsWith("/api/shows/")
+                || uri.startsWith("/api/sessions/")
+                || uri.startsWith("/api/search/");
     }
 }

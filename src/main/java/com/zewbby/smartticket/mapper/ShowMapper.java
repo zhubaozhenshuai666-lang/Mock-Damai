@@ -14,6 +14,9 @@ public interface ShowMapper {
 
     List<ShowListVO> selectShowList();
 
+    List<ShowListVO> selectShowListByKeyword(@Param("keyword") String keyword,
+                                             @Param("limit") Integer limit);
+
     ShowDetailVO selectShowDetailById(Long showId);
 
     List<SessionVO> selectSessionsByShowId(Long showId);

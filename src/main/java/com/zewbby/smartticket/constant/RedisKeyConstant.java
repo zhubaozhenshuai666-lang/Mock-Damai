@@ -72,6 +72,11 @@ public final class RedisKeyConstant {
 
     private static final String ACTIVITY_DEGRADE_CLOSED_PREFIX = "activity:degrade:closed:";
 
+    /** 使用 hash tag 保证 Lua 涉及的多个 Redis key 在 Cluster 中位于同一 slot。 */
+    private static final String ARTIST_RANKING_PREFIX = "ranking:{artist}:";
+
+    private static final String ARTIST_RANKING_DEDUP_PREFIX = "ranking:{artist}:dedup:";
+
     private RedisKeyConstant() {
     }
 
@@ -270,6 +275,37 @@ public final class RedisKeyConstant {
 
     public static String activityDegradeClosedKey(String activityScopeKey) {
         return ACTIVITY_DEGRADE_CLOSED_PREFIX + normalize(activityScopeKey);
+    }
+
+    public static String artistRankingKey(String periodKey) {
+        return ARTIST_RANKING_PREFIX + normalize(periodKey);
+    }
+
+    public static String artistRankingComponentKey(String component, String periodKey) {
+        return ARTIST_RANKING_PREFIX + normalize(component) + ":" + normalize(periodKey);
+    }
+
+    public static String artistRankingHourlyKey(String hourKey) {
+        return artistRankingKey("hourly:" + normalize(hourKey));
+    }
+
+    public static String artistRankingComponentHourlyKey(String component, String hourKey) {
+        return artistRankingComponentKey(component, "hourly:" + normalize(hourKey));
+    }
+
+    public static String artistRankingNamesKey() {
+        return ARTIST_RANKING_PREFIX + "names";
+    }
+
+    public static String artistRankingDedupKey(String periodKey,
+                                               String action,
+                                               String identity,
+                                               String artist) {
+        return ARTIST_RANKING_DEDUP_PREFIX
+                + normalize(periodKey)
+                + ":" + normalize(action)
+                + ":" + normalize(identity)
+                + ":artist:" + normalize(artist);
     }
 
     private static String normalize(String value) {

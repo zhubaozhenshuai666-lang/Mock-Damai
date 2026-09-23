@@ -32,6 +32,8 @@
         <result property="address" column="address"/>
         <result property="startTime" column="start_time"/>
         <result property="endTime" column="end_time"/>
+        <result property="saleStartTime" column="sale_start_time"/>
+        <result property="saleEndTime" column="sale_end_time"/>
     </resultMap>
 
     <resultMap id="TicketCategoryVOResultMap" type="com.zewbby.smartticket.domain.vo.TicketCategoryVO">
@@ -59,6 +61,8 @@
         <result property="showId" column="show_id"/>
         <result property="startTime" column="start_time"/>
         <result property="endTime" column="end_time"/>
+        <result property="saleStartTime" column="sale_start_time"/>
+        <result property="saleEndTime" column="sale_end_time"/>
         <result property="status" column="status"/>
         <result property="createdAt" column="created_at"/>
         <result property="updatedAt" column="updated_at"/>
@@ -83,6 +87,30 @@
             v.city,
             v.name
         ORDER BY nearest_start_time ASC
+    </select>
+
+    <select id="selectShowListByKeyword" resultMap="ShowListVOResultMap">
+        SELECT
+            si.id,
+            si.title,
+            si.artist,
+            v.city,
+            v.name AS venue_name,
+            MIN(ps.start_time) AS nearest_start_time
+        FROM show_info si
+        LEFT JOIN performance_session ps ON ps.show_id = si.id AND ps.status = 'PUBLISHED'
+        LEFT JOIN venue v ON v.id = si.venue_id
+        WHERE si.status = 'PUBLISHED'
+          AND (si.title LIKE CONCAT('%', #{keyword}, '%')
+               OR si.artist LIKE CONCAT('%', #{keyword}, '%'))
+        GROUP BY
+            si.id,
+            si.title,
+            si.artist,
+            v.city,
+            v.name
+        ORDER BY nearest_start_time ASC, si.id DESC
+        LIMIT #{limit}
     </select>
 
     <select id="selectShowDetailById" parameterType="java.lang.Long" resultMap="ShowDetailVOResultMap">
@@ -112,6 +140,8 @@
             v.city,
             v.address,
             ps.start_time,
+            ps.sale_start_time,
+            ps.sale_end_time,
             ps.end_time
         FROM performance_session ps
         LEFT JOIN show_info si ON si.id = ps.show_id
@@ -225,6 +255,8 @@
             show_id,
             start_time,
             end_time,
+            sale_start_time,
+            sale_end_time,
             status,
             created_at,
             updated_at
@@ -239,6 +271,8 @@
             show_id,
             start_time,
             end_time,
+            sale_start_time,
+            sale_end_time,
             status,
             created_at,
             updated_at
@@ -254,6 +288,8 @@
             show_id,
             start_time,
             end_time,
+            sale_start_time,
+            sale_end_time,
             status,
             created_at,
             updated_at
@@ -261,6 +297,8 @@
             #{showId},
             #{startTime},
             #{endTime},
+            #{saleStartTime},
+            #{saleEndTime},
             #{status},
             #{createdAt},
             #{updatedAt}
@@ -272,6 +310,8 @@
         SET
             start_time = #{startTime},
             end_time = #{endTime},
+            sale_start_time = #{saleStartTime},
+            sale_end_time = #{saleEndTime},
             updated_at = NOW()
         WHERE id = #{id}
     </update>

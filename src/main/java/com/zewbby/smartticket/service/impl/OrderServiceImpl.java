@@ -39,6 +39,7 @@ import com.zewbby.smartticket.mapper.TicketCategoryMapper;
 import com.zewbby.smartticket.mapper.TicketOrderAudienceMapper;
 import com.zewbby.smartticket.mapper.TicketStockBucketMapper;
 import com.zewbby.smartticket.mapper.TicketStockMapper;
+import com.zewbby.smartticket.mapper.TicketPurchasePlanMapper;
 import com.zewbby.smartticket.mapper.UserMapper;
 import com.zewbby.smartticket.mq.AsyncCreateOrderMessage;
 import com.zewbby.smartticket.mq.OrderTimeoutMessage;
@@ -47,6 +48,7 @@ import com.zewbby.smartticket.ratelimit.RateLimitService;
 import com.zewbby.smartticket.service.AsyncOrderMessagePublisher;
 import com.zewbby.smartticket.service.AsyncOrderInFlightService;
 import com.zewbby.smartticket.service.AsyncOrderRequestResultCacheService;
+import com.zewbby.smartticket.service.AsyncOrderSubmissionRejectedException;
 import com.zewbby.smartticket.service.AsyncOrderTransactionMarkerService;
 import com.zewbby.smartticket.service.ActivityDegradeService;
 import com.zewbby.smartticket.service.ActivityIsolationService;
@@ -157,6 +159,9 @@ public class OrderServiceImpl implements OrderService {
 
     @Autowired(required = false)
     private ActivityIsolationService activityIsolationService;
+
+    @Autowired(required = false)
+    private TicketPurchasePlanMapper ticketPurchasePlanMapper;
 
     @Autowired(required = false)
     private TicketOrderAudienceMapper ticketOrderAudienceMapper;
@@ -438,21 +443,20 @@ public class OrderServiceImpl implements OrderService {
 
         //从UserContext里获取到userId
         Long currentUserId = UserContext.requireUserId();
-        //检验这个User是否合法，是不是黄牛
-        checkRiskControl(currentUserId, clientIp, gatewayRiskDecision);
-        //读本地/Redis缓存判断票是否已售空，快速失败
-        checkSoldoutFastFail(request.getTicketCategoryId());
-
-        //防止单用户利用脚本并发提交多个抢票请求
-        if (!orderSubmitGuard.tryAcquire(currentUserId, request.getTicketCategoryId())) {
-            throw new BusinessException(ErrorMessageConstant.ORDER_REPEAT_SUBMIT);
-        }
-
         TicketOrderRequest orderRequest = null;
         AsyncOrderSubmitState submitState = new AsyncOrderSubmitState();
         boolean inFlightAcquired = false;
+        boolean submitGuardAcquired = false;
         ActivityScope activityScope = null;
         try {
+            // 库存预扣前的拒绝不会留下库存占用，预约计划可以安全重试。
+            checkRiskControl(currentUserId, clientIp, gatewayRiskDecision);
+            checkSoldoutFastFail(request.getTicketCategoryId());
+            if (!orderSubmitGuard.tryAcquire(currentUserId, request.getTicketCategoryId())) {
+                throw new BusinessException(ErrorMessageConstant.ORDER_REPEAT_SUBMIT);
+            }
+            submitGuardAcquired = true;
+
             //验证用户状态是否被允许
             ensureUserCanSubmit(currentUserId);
 
@@ -481,7 +485,9 @@ public class OrderServiceImpl implements OrderService {
             idempotencyTokenService.consumeOrderToken(currentUserId, request.getIdempotencyToken());
 
             //redis预扣
-            String requestId = generateRequestId(currentUserId, request.getTicketCategoryId(), request.getIdempotencyToken());
+            String requestId = request.getRequestId() == null || request.getRequestId().isBlank()
+                    ? generateRequestId(currentUserId, request.getTicketCategoryId(), request.getIdempotencyToken())
+                    : request.getRequestId();
             Integer stockBucketVersion = stockBucketProperties.getActiveVersion();
             RedisStockDeductPlan deductPlan = buildRedisStockDeductPlan(requestId, request, stockBucketVersion);
 
@@ -530,8 +536,12 @@ public class OrderServiceImpl implements OrderService {
             //回滚redis预扣
             releaseRedisPreDeductedStockAfterSubmitFailure(orderRequest, submitState.redisPreDeducted, "异步下单提交失败");
             releaseAsyncOrderInFlightAfterSubmitFailure(activityScope, request.getTicketCategoryId(), inFlightAcquired);
-            //发生其他意外就释放锁
-            orderSubmitGuard.release(currentUserId, request.getTicketCategoryId());
+            if (submitGuardAcquired) {
+                orderSubmitGuard.release(currentUserId, request.getTicketCategoryId());
+            }
+            if (!submitState.redisDeductionStarted || submitState.redisDeductionRejected) {
+                throw new AsyncOrderSubmissionRejectedException(exception.getMessage());
+            }
             throw exception;
         }
     }
@@ -549,6 +559,7 @@ public class OrderServiceImpl implements OrderService {
         orderRequest.setShowId(request.getShowId());
         orderRequest.setSessionId(request.getSessionId());
         orderRequest.setTicketCategoryId(request.getTicketCategoryId());
+        orderRequest.setPurchasePlanId(request.getPurchasePlanId());
         orderRequest.setQuantity(request.getQuantity());
         orderRequest.setStatus(OrderRequestStatusEnum.QUEUED.getCode());
         orderRequest.setOrderId(null);
@@ -584,6 +595,7 @@ public class OrderServiceImpl implements OrderService {
         message.setDeductedQuantity(orderRequest.getDeductedQuantity());
         message.setDeductedAt(orderRequest.getDeductedAt());
         message.setMessageId(orderRequest.getMessageId());
+        message.setPurchasePlanId(orderRequest.getPurchasePlanId());
         message.setActivityScopeKey(activityScope.scopeKey());
         message.setRoutingPartitionKey(buildRoutingPartitionKey(orderRequest, activityScope));
         return message;
@@ -606,6 +618,7 @@ public class OrderServiceImpl implements OrderService {
                                                          ActivityScope activityScope,
                                                          RedisStockDeductPlan deductPlan,
                                                          AsyncOrderSubmitState submitState) {
+        submitState.redisDeductionStarted = true;
         RedisStockDeductResponse deductResponse = preDeductRedisStock(
                 orderRequest.getRequestId(),
                 request,
@@ -613,6 +626,7 @@ public class OrderServiceImpl implements OrderService {
         );
         RedisStockDeductResult deductResult = deductResponse.getResult();
         if (!deductResult.isSuccess()) {
+            submitState.redisDeductionRejected = true;
             observabilityMetricsService.recordAsyncOrderRequestFailed();
             throw new BusinessException(toPreDeductFailMessage(deductResult));
         }
@@ -1359,6 +1373,7 @@ public class OrderServiceImpl implements OrderService {
         orderVO.setAudiences(loadOrderAudienceSnapshots(order.getId()));
         return orderVO;
     }
+
     private List<TicketOrderAudienceVO> loadOrderAudienceSnapshots(Long orderId) {
         if (ticketOrderAudienceMapper == null || orderId == null) {
             return List.of();
@@ -1409,6 +1424,8 @@ public class OrderServiceImpl implements OrderService {
     }
 
     private static class AsyncOrderSubmitState {
+        private boolean redisDeductionStarted;
+        private boolean redisDeductionRejected;
         private boolean redisPreDeducted;
     }
 

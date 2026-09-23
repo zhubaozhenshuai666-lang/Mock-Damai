@@ -9,7 +9,9 @@ import com.zewbby.smartticket.domain.dto.OrderRequestSuccessBind;
 import com.zewbby.smartticket.domain.dto.OrderSnapshot;
 import com.zewbby.smartticket.domain.dto.StockDecreaseCommand;
 import com.zewbby.smartticket.domain.entity.TicketOrder;
+import com.zewbby.smartticket.domain.entity.TicketOrderAudience;
 import com.zewbby.smartticket.domain.entity.TicketOrderRequest;
+import com.zewbby.smartticket.domain.entity.TicketPurchasePlanAudience;
 import com.zewbby.smartticket.domain.entity.UserAccount;
 import com.zewbby.smartticket.enums.CompensationStatusEnum;
 import com.zewbby.smartticket.enums.ConsumerExceptionTypeEnum;
@@ -21,6 +23,9 @@ import com.zewbby.smartticket.mapper.OrderRequestMapper;
 import com.zewbby.smartticket.mapper.TicketCategoryMapper;
 import com.zewbby.smartticket.mapper.TicketStockBucketMapper;
 import com.zewbby.smartticket.mapper.TicketStockMapper;
+import com.zewbby.smartticket.mapper.TicketOrderAudienceMapper;
+import com.zewbby.smartticket.mapper.TicketPurchasePlanAudienceMapper;
+import com.zewbby.smartticket.mapper.TicketPurchasePlanMapper;
 import com.zewbby.smartticket.mapper.UserMapper;
 import com.zewbby.smartticket.service.AsyncOrderInFlightService;
 import com.zewbby.smartticket.service.DeadLetterMessageService;
@@ -48,7 +53,9 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -95,6 +102,15 @@ class AsyncCreateOrderConsumerTest {
     @Mock
     private OrderSnapshotCacheService orderSnapshotCacheService;
 
+    @Mock
+    private TicketPurchasePlanMapper ticketPurchasePlanMapper;
+
+    @Mock
+    private TicketPurchasePlanAudienceMapper ticketPurchasePlanAudienceMapper;
+
+    @Mock
+    private TicketOrderAudienceMapper ticketOrderAudienceMapper;
+
     private AsyncCreateOrderConsumer consumer;
 
     @BeforeEach
@@ -121,6 +137,108 @@ class AsyncCreateOrderConsumerTest {
                 null,
                 asyncOrderInFlightService
         );
+        ReflectionTestUtils.setField(consumer, "ticketPurchasePlanMapper", ticketPurchasePlanMapper);
+        ReflectionTestUtils.setField(consumer, "ticketPurchasePlanAudienceMapper", ticketPurchasePlanAudienceMapper);
+        ReflectionTestUtils.setField(consumer, "ticketOrderAudienceMapper", ticketOrderAudienceMapper);
+    }
+
+    @Test
+    void planOrderCopiesExactAudienceSnapshotsBeforeRequestSuccess() {
+        TicketOrderRequest queued = queuedRequest();
+        queued.setPurchasePlanId(90L);
+        queued.setQuantity(2);
+        TicketOrderRequest processing = processingRequest();
+        processing.setPurchasePlanId(90L);
+        processing.setQuantity(2);
+        when(orderRequestMapper.selectByRequestId("REQ1")).thenReturn(queued);
+        when(orderRequestMapper.tryMarkProcessing("REQ1")).thenReturn(1);
+        when(orderRequestMapper.selectProcessingByRequestId("REQ1")).thenReturn(processing);
+        when(userMapper.selectById(1L)).thenReturn(new UserAccount(1L, "tester", "13800000001", "encoded", "NORMAL", "USER", null, null));
+        when(ticketCategoryMapper.selectOrderSnapshot(1L, 1L, 2L)).thenReturn(orderSnapshot());
+        when(ticketStockMapper.decreaseStock(2L, 2)).thenReturn(1);
+        when(orderMapper.insert(any(TicketOrder.class))).thenAnswer(invocation -> {
+            TicketOrder order = invocation.getArgument(0);
+            order.setId(200L);
+            return 1;
+        });
+        when(ticketPurchasePlanAudienceMapper.selectByPlanIdAndSelectionType(90L, "SELECTED"))
+                .thenReturn(List.of(
+                        new TicketPurchasePlanAudience(1L, 90L, 301L, "SELECTED", 1, "甲", "hash-a", LocalDateTime.now()),
+                        new TicketPurchasePlanAudience(2L, 90L, 302L, "SELECTED", 2, "乙", "hash-b", LocalDateTime.now())
+                ));
+        when(ticketOrderAudienceMapper.insertBatch(anyList())).thenReturn(2);
+        when(ticketPurchasePlanMapper.markOrderCreated(anyLong(), anyString(), anyLong(), anyString(), any()))
+                .thenReturn(1);
+        when(orderRequestMapper.markSuccess(10L, 200L)).thenReturn(1);
+
+        consumer.consume(new AsyncCreateOrderMessage("REQ1", 1L, 1L, 1L, 2L, 1));
+
+        ArgumentCaptor<List<TicketOrderAudience>> audienceCaptor = ArgumentCaptor.forClass(List.class);
+        org.mockito.InOrder order = inOrder(ticketOrderAudienceMapper, ticketPurchasePlanMapper, orderRequestMapper);
+        order.verify(ticketOrderAudienceMapper).insertBatch(audienceCaptor.capture());
+        order.verify(ticketPurchasePlanMapper).markOrderCreated(eq(90L), eq("REQ1"), eq(200L), eq("ORDER_CREATED"), any());
+        order.verify(orderRequestMapper).markSuccess(10L, 200L);
+        assertThat(audienceCaptor.getValue())
+                .extracting(TicketOrderAudience::getAudienceId, TicketOrderAudience::getNameSnapshot,
+                        TicketOrderAudience::getIdNoHashSnapshot)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(301L, "甲", "hash-a"),
+                        org.assertj.core.groups.Tuple.tuple(302L, "乙", "hash-b"));
+    }
+
+    @Test
+    void planTransitionRowCountMismatchDoesNotMarkOrderRequestSuccessful() {
+        TicketOrderRequest queued = queuedRequest();
+        queued.setPurchasePlanId(90L);
+        TicketOrderRequest processing = processingRequest();
+        processing.setPurchasePlanId(90L);
+        when(orderRequestMapper.selectByRequestId("REQ1")).thenReturn(queued);
+        when(orderRequestMapper.tryMarkProcessing("REQ1")).thenReturn(1);
+        when(orderRequestMapper.selectProcessingByRequestId("REQ1")).thenReturn(processing);
+        when(userMapper.selectById(1L)).thenReturn(new UserAccount(1L, "tester", "13800000001", "encoded", "NORMAL", "USER", null, null));
+        when(ticketCategoryMapper.selectOrderSnapshot(1L, 1L, 2L)).thenReturn(orderSnapshot());
+        when(ticketStockMapper.decreaseStock(2L, 1)).thenReturn(1);
+        when(orderMapper.insert(any(TicketOrder.class))).thenAnswer(invocation -> {
+            TicketOrder order = invocation.getArgument(0);
+            order.setId(200L);
+            return 1;
+        });
+        when(ticketPurchasePlanAudienceMapper.selectByPlanIdAndSelectionType(90L, "SELECTED"))
+                .thenReturn(List.of(new TicketPurchasePlanAudience(
+                        1L, 90L, 301L, "SELECTED", 1, "甲", "hash-a", LocalDateTime.now())));
+        when(ticketOrderAudienceMapper.insertBatch(anyList())).thenReturn(1);
+        when(ticketPurchasePlanMapper.markOrderCreated(anyLong(), anyString(), anyLong(), anyString(), any()))
+                .thenReturn(0);
+
+        assertThatThrownBy(() -> consumer.consume(new AsyncCreateOrderMessage("REQ1", 1L, 1L, 1L, 2L, 1)))
+                .isInstanceOf(ConsumerRetryableException.class);
+
+        verify(orderRequestMapper, never()).markSuccess(anyLong(), anyLong());
+    }
+
+    @Test
+    void planRemainsReconcilableWhenRedisCompensationIsNotConfirmed() {
+        TicketOrderRequest queued = queuedRequest();
+        queued.setPurchasePlanId(90L);
+        TicketOrderRequest processing = processingRequest();
+        processing.setPurchasePlanId(90L);
+        when(orderRequestMapper.selectByRequestId("REQ1")).thenReturn(queued);
+        when(orderRequestMapper.tryMarkProcessing("REQ1")).thenReturn(1);
+        when(orderRequestMapper.selectProcessingByRequestId("REQ1")).thenReturn(processing);
+        when(userMapper.selectById(1L)).thenReturn(new UserAccount(1L, "tester", "13800000001", "encoded", "NORMAL", "USER", null, null));
+        when(ticketCategoryMapper.selectOrderSnapshot(1L, 1L, 2L)).thenReturn(null);
+        when(ticketCategoryMapper.existsShowSessionTicketCategoryRelation(1L, 1L, 2L)).thenReturn(false);
+        when(orderRequestMapper.markFailed(10L, ErrorMessageConstant.SHOW_SESSION_TICKET_CATEGORY_NOT_MATCH))
+                .thenReturn(1);
+        when(orderRequestMapper.tryMarkCompensating(10L)).thenReturn(1);
+        when(stockLuaService.releasePreDeductedStock("REQ1", 2L, null, null, 1))
+                .thenReturn(RedisStockReleaseResult.INVALID_QUANTITY);
+
+        consumer.consume(new AsyncCreateOrderMessage("REQ1", 1L, 1L, 1L, 2L, 1));
+
+        verify(ticketPurchasePlanMapper, never()).markFailed(anyLong(), anyString(), anyString(), anyString(), any());
+        verify(ticketPurchasePlanMapper).markReconciliationRequired(
+                eq(90L), eq("REQ1"), eq("RECONCILIATION_REQUIRED"), anyString(), any());
     }
 
     @Test

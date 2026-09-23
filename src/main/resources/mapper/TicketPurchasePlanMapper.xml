@@ -1,0 +1,314 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.zewbby.smartticket.mapper.TicketPurchasePlanMapper">
+
+    <resultMap id="TicketPurchasePlanResultMap" type="com.zewbby.smartticket.domain.entity.TicketPurchasePlan">
+        <id property="id" column="id"/>
+        <result property="planNo" column="plan_no"/>
+        <result property="userId" column="user_id"/>
+        <result property="showId" column="show_id"/>
+        <result property="sessionId" column="session_id"/>
+        <result property="ticketCategoryId" column="ticket_category_id"/>
+        <result property="quantity" column="quantity"/>
+        <result property="status" column="status"/>
+        <result property="version" column="version"/>
+        <result property="activePlanKey" column="active_plan_key"/>
+        <result property="completedVersion" column="completed_version"/>
+        <result property="defaultAudienceCount" column="default_audience_count"/>
+        <result property="selectedAudienceCount" column="selected_audience_count"/>
+        <result property="idempotencyToken" column="idempotency_token"/>
+        <result property="orderRequestId" column="order_request_id"/>
+        <result property="orderId" column="order_id"/>
+        <result property="expireTime" column="expire_time"/>
+        <result property="confirmedAt" column="confirmed_at"/>
+        <result property="completedAt" column="completed_at"/>
+        <result property="submittedAt" column="submitted_at"/>
+        <result property="failReason" column="fail_reason"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <sql id="BaseColumns">
+        id,
+        plan_no,
+        user_id,
+        show_id,
+        session_id,
+        ticket_category_id,
+        quantity,
+        status,
+        version,
+        active_plan_key,
+        completed_version,
+        default_audience_count,
+        selected_audience_count,
+        idempotency_token,
+        order_request_id,
+        order_id,
+        expire_time,
+        confirmed_at,
+        completed_at,
+        submitted_at,
+        fail_reason,
+        created_at,
+        updated_at
+    </sql>
+
+    <insert id="insert"
+            parameterType="com.zewbby.smartticket.domain.entity.TicketPurchasePlan"
+            useGeneratedKeys="true"
+            keyProperty="id">
+        INSERT INTO ticket_purchase_plan (
+            plan_no,
+            user_id,
+            show_id,
+            session_id,
+            ticket_category_id,
+            quantity,
+            status,
+            version,
+            active_plan_key,
+            completed_version,
+            default_audience_count,
+            selected_audience_count,
+            idempotency_token,
+            order_request_id,
+            order_id,
+            expire_time,
+            confirmed_at,
+            completed_at,
+            submitted_at,
+            fail_reason,
+            created_at,
+            updated_at
+        ) VALUES (
+            #{planNo},
+            #{userId},
+            #{showId},
+            #{sessionId},
+            #{ticketCategoryId},
+            #{quantity},
+            #{status},
+            COALESCE(#{version}, 0),
+            #{activePlanKey},
+            #{completedVersion},
+            COALESCE(#{defaultAudienceCount}, 0),
+            COALESCE(#{selectedAudienceCount}, 0),
+            #{idempotencyToken},
+            #{orderRequestId},
+            #{orderId},
+            #{expireTime},
+            #{confirmedAt},
+            #{completedAt},
+            #{submittedAt},
+            #{failReason},
+            #{createdAt},
+            #{updatedAt}
+        )
+    </insert>
+
+    <select id="selectByIdAndUserId" resultMap="TicketPurchasePlanResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM ticket_purchase_plan
+        WHERE id = #{id}
+          AND user_id = #{userId}
+    </select>
+
+    <select id="selectByUserId" resultMap="TicketPurchasePlanResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM ticket_purchase_plan
+        WHERE user_id = #{userId}
+        <if test="status != null and status != ''">
+            AND status = #{status}
+        </if>
+        ORDER BY id DESC
+        LIMIT #{limit}
+    </select>
+
+    <update id="updateSpec">
+        UPDATE ticket_purchase_plan
+        SET session_id = #{sessionId},
+            ticket_category_id = #{ticketCategoryId},
+            quantity = #{quantity},
+            status = 'DRAFT',
+            active_plan_key = #{activePlanKey},
+            completed_version = NULL,
+            confirmed_at = NULL,
+            completed_at = NULL,
+            expire_time = (SELECT ps.sale_start_time FROM performance_session ps WHERE ps.id = #{sessionId}),
+            version = version + 1,
+            updated_at = #{updatedAt}
+        WHERE id = #{id}
+          AND user_id = #{userId}
+          AND status IN ('DRAFT', 'READY')
+          AND version = #{version}
+          AND EXISTS (
+              SELECT 1 FROM performance_session ps
+              WHERE ps.id = #{sessionId}
+                AND ps.sale_start_time IS NOT NULL
+                AND ps.sale_start_time > #{now}
+          )
+    </update>
+
+    <update id="updateAudiences">
+        UPDATE ticket_purchase_plan AS p
+        SET status = 'DRAFT',
+            selected_audience_count = #{selectedAudienceCount},
+            completed_version = NULL,
+            confirmed_at = NULL,
+            completed_at = NULL,
+            version = version + 1,
+            updated_at = #{updatedAt}
+        WHERE p.id = #{id}
+          AND p.user_id = #{userId}
+          AND p.status IN ('DRAFT', 'READY')
+          AND p.version = #{version}
+          AND p.session_id IS NOT NULL
+          AND EXISTS (
+              SELECT 1 FROM performance_session ps
+              WHERE ps.id = p.session_id
+                AND ps.sale_start_time IS NOT NULL
+                AND ps.sale_start_time > #{now}
+          )
+    </update>
+
+    <update id="complete">
+        UPDATE ticket_purchase_plan AS p
+        SET status = 'READY',
+            version = version + 1,
+            completed_version = #{completedVersion},
+            confirmed_at = #{completedAt},
+            completed_at = #{completedAt},
+            updated_at = #{completedAt}
+        WHERE p.id = #{id}
+          AND p.user_id = #{userId}
+          AND p.status = 'DRAFT'
+          AND p.version = #{version}
+          AND EXISTS (
+              SELECT 1 FROM performance_session ps
+              WHERE ps.id = p.session_id
+                AND ps.sale_start_time IS NOT NULL
+                AND ps.sale_start_time > #{now}
+          )
+    </update>
+
+    <update id="beginSubmitting">
+        UPDATE ticket_purchase_plan AS p
+        SET status = #{status},
+            version = version + 1,
+            idempotency_token = #{idempotencyToken},
+            order_request_id = #{orderRequestId},
+            submitted_at = #{submittedAt},
+            updated_at = #{updatedAt}
+        WHERE p.id = #{id}
+          AND p.user_id = #{userId}
+          AND p.status IN ('READY', 'FAILED')
+          AND p.version = #{version}
+          AND p.completed_version IS NOT NULL
+          AND EXISTS (
+              SELECT 1 FROM performance_session ps
+              WHERE ps.id = p.session_id
+                AND ps.sale_start_time IS NOT NULL
+                AND ps.sale_start_time &lt;= #{now}
+                AND ps.sale_end_time IS NOT NULL
+                AND ps.sale_end_time > #{now}
+          )
+    </update>
+
+    <update id="markOrderCreated">
+        UPDATE ticket_purchase_plan
+        SET status = #{status},
+            order_request_id = #{orderRequestId},
+            order_id = #{orderId},
+            active_plan_key = NULL,
+            version = version + 1,
+            updated_at = #{updatedAt}
+        WHERE id = #{id}
+          AND status IN ('SUBMITTING', 'RECONCILIATION_REQUIRED')
+          AND order_request_id = #{orderRequestId}
+    </update>
+
+    <update id="markFailed">
+        UPDATE ticket_purchase_plan
+        SET status = #{status},
+            fail_reason = #{failReason},
+            version = version + 1,
+            updated_at = #{updatedAt}
+        WHERE id = #{id}
+          AND status IN ('SUBMITTING', 'RECONCILIATION_REQUIRED')
+          AND order_request_id = #{orderRequestId}
+    </update>
+
+    <update id="markReconciliationRequired">
+        UPDATE ticket_purchase_plan
+        SET status = #{status},
+            fail_reason = #{failReason},
+            updated_at = #{updatedAt}
+        WHERE id = #{id}
+          AND status IN ('SUBMITTING', 'RECONCILIATION_REQUIRED')
+          AND order_request_id = #{orderRequestId}
+    </update>
+
+    <update id="cancelEditable">
+        UPDATE ticket_purchase_plan
+        SET status = #{status},
+            active_plan_key = NULL,
+            version = version + 1,
+            fail_reason = NULL,
+            updated_at = #{updatedAt}
+        WHERE id = #{id}
+          AND user_id = #{userId}
+          AND status IN ('DRAFT', 'READY', 'FAILED')
+          AND version = #{version}
+    </update>
+
+    <update id="expireEditable">
+        UPDATE ticket_purchase_plan AS p
+        SET status = #{expiredStatus},
+            active_plan_key = NULL,
+            version = version + 1,
+            fail_reason = #{reason},
+            updated_at = #{updatedAt}
+        WHERE p.status = 'DRAFT'
+          AND p.session_id IS NOT NULL
+          AND EXISTS (
+              SELECT 1 FROM performance_session ps
+              WHERE ps.id = p.session_id
+                AND ps.sale_start_time IS NOT NULL
+                AND ps.sale_start_time &lt;= #{now}
+          )
+        ORDER BY p.id ASC
+        LIMIT #{limit}
+    </update>
+
+    <update id="expireReadyAfterSale">
+        UPDATE ticket_purchase_plan AS p
+        SET status = #{expiredStatus},
+            active_plan_key = NULL,
+            version = version + 1,
+            fail_reason = #{reason},
+            updated_at = #{updatedAt}
+        WHERE p.status = 'READY'
+          AND p.session_id IS NOT NULL
+          AND EXISTS (
+              SELECT 1 FROM performance_session ps
+              WHERE ps.id = p.session_id
+                AND ps.sale_end_time IS NOT NULL
+                AND ps.sale_end_time &lt;= #{now}
+          )
+        ORDER BY p.id ASC
+        LIMIT #{limit}
+    </update>
+
+    <select id="selectStaleForReconciliation" resultMap="TicketPurchasePlanResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM ticket_purchase_plan
+        WHERE status IN ('SUBMITTING', 'RECONCILIATION_REQUIRED')
+          AND updated_at &lt;= #{before}
+        ORDER BY updated_at ASC
+        LIMIT #{limit}
+    </select>
+
+</mapper>

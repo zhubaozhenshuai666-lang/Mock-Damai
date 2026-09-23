@@ -13,6 +13,8 @@ import com.zewbby.smartticket.domain.dto.StockDecreaseCommand;
 import com.zewbby.smartticket.service.StockLuaService;
 import com.zewbby.smartticket.domain.entity.TicketOrder;
 import com.zewbby.smartticket.domain.entity.TicketOrderRequest;
+import com.zewbby.smartticket.domain.entity.TicketOrderAudience;
+import com.zewbby.smartticket.domain.entity.TicketPurchasePlanAudience;
 import com.zewbby.smartticket.domain.entity.UserAccount;
 import com.zewbby.smartticket.domain.vo.OrderRequestVO;
 import com.zewbby.smartticket.enums.ConsumerExceptionTypeEnum;
@@ -25,6 +27,9 @@ import com.zewbby.smartticket.mapper.OrderRequestMapper;
 import com.zewbby.smartticket.mapper.TicketCategoryMapper;
 import com.zewbby.smartticket.mapper.TicketStockBucketMapper;
 import com.zewbby.smartticket.mapper.TicketStockMapper;
+import com.zewbby.smartticket.mapper.TicketOrderAudienceMapper;
+import com.zewbby.smartticket.mapper.TicketPurchasePlanAudienceMapper;
+import com.zewbby.smartticket.mapper.TicketPurchasePlanMapper;
 import com.zewbby.smartticket.mapper.UserMapper;
 import com.zewbby.smartticket.service.AsyncOrderInFlightService;
 import com.zewbby.smartticket.service.AsyncOrderRequestResultCacheService;
@@ -94,6 +99,15 @@ public class AsyncCreateOrderConsumer {
     private final OrderSnapshotCacheService orderSnapshotCacheService;
 
     private final AsyncOrderInFlightService asyncOrderInFlightService;
+
+    @Autowired(required = false)
+    private TicketPurchasePlanMapper ticketPurchasePlanMapper;
+
+    @Autowired(required = false)
+    private TicketPurchasePlanAudienceMapper ticketPurchasePlanAudienceMapper;
+
+    @Autowired(required = false)
+    private TicketOrderAudienceMapper ticketOrderAudienceMapper;
 
     @Autowired(required = false)
     private AsyncOrderSubmitProperties asyncOrderSubmitProperties;
@@ -358,6 +372,7 @@ public class AsyncCreateOrderConsumer {
         if (!candidates.isEmpty()) {
             decreaseBatchStock(candidates);
             insertBatchOrders(candidates);
+            completeBatchPurchasePlans(candidates);
             markBatchSuccess(candidates);
             completeBatchSuccess(candidates);
         }
@@ -480,6 +495,7 @@ public class AsyncCreateOrderConsumer {
             if (insertRows != 1) {
                 throw new IllegalStateException("订单创建失败");
             }
+            completePurchasePlan(orderRequest, order);
             //非功能性需求（NFR）中的可观测性（Observability）建设，其直接作用对象并非普通用户或数据库，而是运维监控体系
             observabilityMetricsService.recordOrderCreated();
             publishOrderCreatedEvents(order);
@@ -628,6 +644,7 @@ public class AsyncCreateOrderConsumer {
         orderRequest.setShowId(message.getShowId());
         orderRequest.setSessionId(message.getSessionId());
         orderRequest.setTicketCategoryId(message.getTicketCategoryId());
+        orderRequest.setPurchasePlanId(message.getPurchasePlanId());
         orderRequest.setQuantity(message.getQuantity());
         orderRequest.setStatus(OrderRequestStatusEnum.PROCESSING.getCode());
         orderRequest.setOrderId(null);
@@ -841,6 +858,12 @@ public class AsyncCreateOrderConsumer {
         }
     }
 
+    private void completeBatchPurchasePlans(List<BatchOrderCandidate> candidates) {
+        for (BatchOrderCandidate candidate : candidates) {
+            completePurchasePlan(candidate.orderRequest, candidate.order);
+        }
+    }
+
     private boolean isNormalUser(Long userId) {
         if (userStatusCacheService != null) {
             return userStatusCacheService.isNormalUser(userId);
@@ -902,7 +925,24 @@ public class AsyncCreateOrderConsumer {
         if (rows == 1) {
             observabilityMetricsService.recordAsyncOrderRequestFailed();
             TicketOrderRequest failedRequest = orderRequestMapper.selectByRequestId(existingRequest.getRequestId());
-            compensateRedisPreDeductedStock(failedRequest, reason);
+            boolean compensationSafe = compensateRedisPreDeductedStock(failedRequest, reason);
+            if (existingRequest.getPurchasePlanId() != null && ticketPurchasePlanMapper != null) {
+                if (compensationSafe) {
+                    ticketPurchasePlanMapper.markFailed(
+                            existingRequest.getPurchasePlanId(),
+                            existingRequest.getRequestId(),
+                            "FAILED",
+                            reason,
+                            LocalDateTime.now());
+                } else {
+                    ticketPurchasePlanMapper.markReconciliationRequired(
+                            existingRequest.getPurchasePlanId(),
+                            existingRequest.getRequestId(),
+                            "RECONCILIATION_REQUIRED",
+                            reason,
+                            LocalDateTime.now());
+                }
+            }
             releaseAsyncOrderInFlight(existingRequest);
             recordDeadLetter(message, ConsumerExceptionTypeEnum.DATA_INCONSISTENCY, reason);
         }
@@ -920,6 +960,77 @@ public class AsyncCreateOrderConsumer {
             releaseAsyncOrderInFlight(orderRequest);
         }
         recordDeadLetter(message, ConsumerExceptionTypeEnum.BUSINESS_REJECT, failReason);
+    }
+
+    private void completePurchasePlan(TicketOrderRequest orderRequest, TicketOrder order) {
+        if (orderRequest == null || orderRequest.getPurchasePlanId() == null) {
+            return;
+        }
+        if (ticketPurchasePlanAudienceMapper == null || ticketOrderAudienceMapper == null
+                || ticketPurchasePlanMapper == null) {
+            throw new IllegalStateException("预约订单快照持久化依赖未配置");
+        }
+        List<TicketPurchasePlanAudience> selected = ticketPurchasePlanAudienceMapper
+                .selectByPlanIdAndSelectionType(orderRequest.getPurchasePlanId(), "SELECTED");
+        if (selected.size() != orderRequest.getQuantity()) {
+            throw new IllegalStateException("预约计划观演人与购票数量不一致");
+        }
+        LocalDateTime now = LocalDateTime.now();
+        List<TicketOrderAudience> orderAudiences = selected.stream()
+                .sorted(Comparator.comparing(TicketPurchasePlanAudience::getLineNo))
+                .map(item -> new TicketOrderAudience(
+                        null,
+                        order.getId(),
+                        item.getLineNo(),
+                        item.getAudienceId(),
+                        item.getNameSnapshot(),
+                        item.getIdNoHashSnapshot(),
+                        now))
+                .toList();
+        List<TicketOrderAudience> existing = ticketOrderAudienceMapper.selectByOrderId(order.getId());
+        if (existing != null && !existing.isEmpty()) {
+            if (!sameAudienceSnapshots(existing, orderAudiences)) {
+                throw new IllegalStateException("订单观演人快照与预约方案不一致");
+            }
+        } else {
+            int insertedRows = ticketOrderAudienceMapper.insertBatch(orderAudiences);
+            if (insertedRows != orderAudiences.size()) {
+                throw new IllegalStateException("订单观演人快照保存数量不一致");
+            }
+        }
+        if (ticketPurchasePlanMapper != null) {
+            int planRows = ticketPurchasePlanMapper.markOrderCreated(
+                    orderRequest.getPurchasePlanId(),
+                    orderRequest.getRequestId(),
+                    order.getId(),
+                    "ORDER_CREATED",
+                    now);
+            if (planRows != 1) {
+                throw new IllegalStateException("预约计划订单状态更新失败");
+            }
+        }
+    }
+
+    private boolean sameAudienceSnapshots(List<TicketOrderAudience> existing,
+                                          List<TicketOrderAudience> expected) {
+        if (existing.size() != expected.size()) {
+            return false;
+        }
+        Map<Integer, TicketOrderAudience> existingByLine = new HashMap<>();
+        for (TicketOrderAudience audience : existing) {
+            existingByLine.put(audience.getLineNo(), audience);
+        }
+        for (TicketOrderAudience expectedAudience : expected) {
+            TicketOrderAudience existingAudience = existingByLine.get(expectedAudience.getLineNo());
+            if (existingAudience == null
+                    || !java.util.Objects.equals(existingAudience.getOrderId(), expectedAudience.getOrderId())
+                    || !java.util.Objects.equals(existingAudience.getAudienceId(), expectedAudience.getAudienceId())
+                    || !java.util.Objects.equals(existingAudience.getNameSnapshot(), expectedAudience.getNameSnapshot())
+                    || !java.util.Objects.equals(existingAudience.getIdNoHashSnapshot(), expectedAudience.getIdNoHashSnapshot())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -951,10 +1062,31 @@ public class AsyncCreateOrderConsumer {
         if (!markFailed(orderRequest, failReason)) {
             return false;
         }
-        compensateRedisPreDeductedStock(orderRequest, failReason);
-        orderRequest.setStatus(OrderRequestStatusEnum.FAILED.getCode());
+        boolean compensationSafe = compensateRedisPreDeductedStock(orderRequest, failReason);
+        if (!Boolean.TRUE.equals(orderRequest.getRedisDeducted())) {
+            orderRequest.setStatus(OrderRequestStatusEnum.FAILED.getCode());
+        } else if (!compensationSafe) {
+            orderRequest.setStatus(OrderRequestStatusEnum.FAILED.getCode());
+        }
         orderRequest.setFailReason(failReason);
         cacheAsyncOrderResult(orderRequest);
+        if (orderRequest.getPurchasePlanId() != null && ticketPurchasePlanMapper != null) {
+            if (compensationSafe) {
+                ticketPurchasePlanMapper.markFailed(
+                        orderRequest.getPurchasePlanId(),
+                        orderRequest.getRequestId(),
+                        "FAILED",
+                        failReason,
+                        LocalDateTime.now());
+            } else {
+                ticketPurchasePlanMapper.markReconciliationRequired(
+                        orderRequest.getPurchasePlanId(),
+                        orderRequest.getRequestId(),
+                        "RECONCILIATION_REQUIRED",
+                        failReason,
+                        LocalDateTime.now());
+            }
+        }
         return true;
     }
 
@@ -986,14 +1118,14 @@ public class AsyncCreateOrderConsumer {
         return orderRequestVO;
     }
 
-    private void compensateRedisPreDeductedStock(TicketOrderRequest orderRequest, String failReason) {
+    private boolean compensateRedisPreDeductedStock(TicketOrderRequest orderRequest, String failReason) {
         if (orderRequest == null) {
-            return;
+            return false;
         }
         if (!Boolean.TRUE.equals(orderRequest.getRedisDeducted())) {
             LOGGER.debug("Skipped Redis pre-deduct release because request has no deducted marker, requestId={}",
                     orderRequest.getRequestId());
-            return;
+            return true;
         }
         if (orderRequest.getDeductedQuantity() == null || orderRequest.getDeductedQuantity() <= 0) {
             int claimRows = orderRequestMapper.tryMarkCompensating(orderRequest.getId());
@@ -1012,7 +1144,7 @@ public class AsyncCreateOrderConsumer {
                     ConsumerExceptionTypeEnum.DATA_INCONSISTENCY,
                     "Redis已预扣但deducted_quantity缺失"
             );
-            return;
+            return false;
         }
         /*
          * compensated 这个 boolean 只能表达“是否补偿完成”，无法表达“正在补偿”或“补偿失败”。
@@ -1023,7 +1155,10 @@ public class AsyncCreateOrderConsumer {
         if (claimRows != 1) {
             LOGGER.debug("Skipped Redis compensation because another process has claimed it, requestId={}",
                     orderRequest.getRequestId());
-            return;
+            TicketOrderRequest latest = orderRequestMapper.selectByRequestId(orderRequest.getRequestId());
+            return latest != null && (Boolean.TRUE.equals(latest.getCompensated())
+                    || "COMPENSATED".equals(latest.getStatus())
+                    || "COMPENSATED".equals(latest.getCompensationStatus()));
         }
         try {
             RedisStockReleaseResult releaseResult = stockLuaService.releasePreDeductedStock(
@@ -1035,14 +1170,19 @@ public class AsyncCreateOrderConsumer {
             );
             if (releaseResult.isSuccess() || releaseResult == RedisStockReleaseResult.ALREADY_COMPENSATED) {
                 orderRequestMapper.markCompensated(orderRequest.getId(), LocalDateTime.now());
+                orderRequest.setCompensated(true);
+                orderRequest.setCompensationStatus("COMPENSATED");
+                orderRequest.setStatus(OrderRequestStatusEnum.COMPENSATED.getCode());
             } else {
                 orderRequestMapper.markCompensateFailed(orderRequest.getId(), failReason + ", Redis补偿失败: " + releaseResult.getMessage());
+                orderRequest.setCompensationStatus("COMPENSATE_FAILED");
             }
             LOGGER.debug("Released Redis pre-deducted stock for failed async request, requestId={}, ticketCategoryId={}, quantity={}, result={}",
                     orderRequest.getRequestId(),
                     orderRequest.getTicketCategoryId(),
                     orderRequest.getDeductedQuantity(),
                     releaseResult);
+            return releaseResult.isSuccess() || releaseResult == RedisStockReleaseResult.ALREADY_COMPENSATED;
         } catch (RuntimeException exception) {
             /*
              * Redis 释放失败时不能假装成功，否则库存会被长期占住且排查不到。
@@ -1051,6 +1191,7 @@ public class AsyncCreateOrderConsumer {
             orderRequestMapper.markCompensateFailed(orderRequest.getId(), failReason + ", Redis补偿异常: " + exception.getMessage());
             LOGGER.error("Failed to release Redis pre-deducted stock for failed async request, requestId={}, keep FAILED for later compensation",
                     orderRequest.getRequestId(), exception.getMessage());
+            return false;
         }
     }
 

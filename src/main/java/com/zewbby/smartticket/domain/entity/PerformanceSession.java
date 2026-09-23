@@ -24,6 +24,10 @@ public class PerformanceSession {
 
     private LocalDateTime endTime;
 
+    private LocalDateTime saleStartTime;
+
+    private LocalDateTime saleEndTime;
+
     private String status;
 
     private LocalDateTime createdAt;

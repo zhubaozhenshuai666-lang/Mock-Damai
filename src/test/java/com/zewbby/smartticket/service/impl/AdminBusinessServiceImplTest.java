@@ -125,6 +125,41 @@ class AdminBusinessServiceImplTest {
     }
 
     @Test
+    void createSessionCopiesSaleWindow() {
+        when(showMapper.selectShowInfoById(1L)).thenReturn(showInfo(ShowStatusEnum.DRAFT.getCode()));
+        LocalDateTime start = LocalDateTime.now().plusDays(2);
+        LocalDateTime end = start.plusHours(2);
+        AdminCreateSessionRequest request = new AdminCreateSessionRequest();
+        request.setStartTime(start);
+        request.setEndTime(end);
+        request.setSaleStartTime(start.minusDays(1));
+        request.setSaleEndTime(start.minusHours(1));
+
+        service.createSession(1L, request);
+
+        ArgumentCaptor<PerformanceSession> captor = ArgumentCaptor.forClass(PerformanceSession.class);
+        verify(showMapper).insertSession(captor.capture());
+        assertThat(captor.getValue().getSaleStartTime()).isEqualTo(request.getSaleStartTime());
+        assertThat(captor.getValue().getSaleEndTime()).isEqualTo(request.getSaleEndTime());
+    }
+
+    @Test
+    void createSessionRejectsSaleWindowAfterPerformanceStart() {
+        when(showMapper.selectShowInfoById(1L)).thenReturn(showInfo(ShowStatusEnum.DRAFT.getCode()));
+        LocalDateTime start = LocalDateTime.now().plusDays(2);
+        AdminCreateSessionRequest request = new AdminCreateSessionRequest();
+        request.setStartTime(start);
+        request.setEndTime(start.plusHours(2));
+        request.setSaleStartTime(start.minusDays(1));
+        request.setSaleEndTime(start.plusMinutes(1));
+
+        assertThatThrownBy(() -> service.createSession(1L, request))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("开售结束时间必须不晚于场次开始时间");
+        verify(showMapper, never()).insertSession(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
     void createTicketCategoryFailsWhenSessionDoesNotExist() {
         AdminCreateTicketCategoryRequest request = new AdminCreateTicketCategoryRequest();
         request.setCategoryName("内场票");
@@ -504,6 +539,8 @@ class AdminBusinessServiceImplTest {
         session.setShowId(1L);
         session.setStartTime(LocalDateTime.now().plusDays(1));
         session.setEndTime(LocalDateTime.now().plusDays(1).plusHours(2));
+        session.setSaleStartTime(LocalDateTime.now().plusHours(12));
+        session.setSaleEndTime(session.getStartTime().minusHours(1));
         session.setStatus(status);
         return session;
     }

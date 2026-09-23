@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.zewbby.smartticket.mapper.AudiencePersonMapper">
+
+    <resultMap id="AudiencePersonResultMap" type="com.zewbby.smartticket.domain.entity.AudiencePerson">
+        <id property="id" column="id"/>
+        <result property="userId" column="user_id"/>
+        <result property="name" column="name"/>
+        <result property="idType" column="id_type"/>
+        <result property="idNoCiphertext" column="id_no_ciphertext"/>
+        <result property="idNoHash" column="id_no_hash"/>
+        <result property="status" column="status"/>
+        <result property="version" column="version"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <sql id="BaseColumns">
+        id,
+        user_id,
+        name,
+        id_type,
+        id_no_ciphertext,
+        id_no_hash,
+        status,
+        version,
+        created_at,
+        updated_at
+    </sql>
+
+    <insert id="insert"
+            parameterType="com.zewbby.smartticket.domain.entity.AudiencePerson"
+            useGeneratedKeys="true"
+            keyProperty="id">
+        INSERT INTO audience_person (
+            user_id,
+            name,
+            id_type,
+            id_no_ciphertext,
+            id_no_hash,
+            status,
+            version,
+            created_at,
+            updated_at
+        ) VALUES (
+            #{userId},
+            #{name},
+            #{idType},
+            #{idNoCiphertext},
+            #{idNoHash},
+            #{status},
+            COALESCE(#{version}, 0),
+            #{createdAt},
+            #{updatedAt}
+        )
+    </insert>
+
+    <select id="selectByIdAndUserId" resultMap="AudiencePersonResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM audience_person
+        WHERE id = #{id}
+          AND user_id = #{userId}
+    </select>
+
+    <select id="selectByIdsAndUserId" resultMap="AudiencePersonResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM audience_person
+        WHERE user_id = #{userId}
+          AND id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </select>
+
+    <select id="selectByUserId" resultMap="AudiencePersonResultMap">
+        SELECT <include refid="BaseColumns"/>
+        FROM audience_person
+        WHERE user_id = #{userId}
+          AND status = 'ACTIVE'
+        ORDER BY id ASC
+    </select>
+
+    <update id="updateByIdAndUserId" parameterType="com.zewbby.smartticket.domain.entity.AudiencePerson">
+        UPDATE audience_person
+        SET name = #{name},
+            id_type = #{idType},
+            id_no_ciphertext = #{idNoCiphertext},
+            id_no_hash = #{idNoHash},
+            version = version + 1,
+            updated_at = #{updatedAt}
+        WHERE id = #{id}
+          AND user_id = #{userId}
+          AND status = 'ACTIVE'
+          AND version = #{version}
+    </update>
+
+    <update id="disableByIdAndUserId">
+        UPDATE audience_person
+        SET status = #{status},
+            version = version + 1,
+            updated_at = #{updatedAt}
+        WHERE id = #{id}
+          AND user_id = #{userId}
+          AND status = 'ACTIVE'
+    </update>
+</mapper>

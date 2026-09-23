@@ -143,6 +143,19 @@ curl http://127.0.0.1:8081/actuator/health
 | `POST` | `/api/auth/logout` | 当前 Token 退出登录 |
 | `GET` | `/api/shows` | 查询已发布演出 |
 | `GET` | `/api/shows/{id}` | 查询演出详情、场次和票档 |
+| `GET` | `/api/search/shows?keyword=` | 搜索演出，命中艺人计入搜索热度 |
+| `GET` | `/api/rankings/artists?period=hot` | 查询最近 24 小时艺人/乐队热榜 |
+| `GET` | `/api/rankings/artists?period=weekly` | 查询本周艺人/乐队热度榜 |
+| `POST` | `/api/audiences` | 创建实名观演人 |
+| `GET` | `/api/audiences` | 查询当前用户观演人 |
+| `POST` | `/api/purchase-plans` | 创建开售前填单预约（不占库存） |
+| `PUT` | `/api/purchase-plans/{id}/spec` | 开售前选择/修改场次、票档和数量 |
+| `PUT` | `/api/purchase-plans/{id}/audiences` | 开售前选择/修改观演人，人数必须等于购票数量 |
+| `POST` | `/api/purchase-plans/{id}/complete` | 开售前完成预约并冻结观演人身份快照 |
+| `POST` | `/api/purchase-plans/{id}/submit` | 开售后手动按已完成方案提交抢票，返回 `requestId` |
+| `GET` | `/api/purchase-plans/{id}` | 查询预约方案及状态 |
+| `GET` | `/api/purchase-plans?status=` | 查询当前用户预约计划 |
+| `POST` | `/api/purchase-plans/{id}/cancel` | 取消尚未创单的预约计划 |
 | `GET` | `/api/orders/idempotency-token` | 获取一次性下单 Token |
 | `POST` | `/api/orders/async` | 异步下单主入口，返回 `requestId` |
 | `GET` | `/api/order-requests/{requestId}` | 查询异步创单结果 |
@@ -151,7 +164,15 @@ curl http://127.0.0.1:8081/actuator/health
 | `POST` | `/api/payments/mock-pay` | 本地模拟支付回调，需携带签名 |
 | `POST` | `/api/orders/{id}/cancel` | 取消当前用户待支付订单 |
 
-`POST /api/orders` 和 `POST /api/orders/{id}/pay` 为废弃兼容入口，不属于抢票主链路。
+`POST /api/orders` 和 `POST /api/orders/{id}/pay` 为已废弃的兼容入口，不属于抢票主链路。
+
+预约计划在抢票请求成功创建正式订单后进入 `ORDER_CREATED`；此后支付、取消和超时关闭由正式订单状态管理，预约计划不镜像这些订单状态。
+
+预约计划只是开售前保存的填单方案，不是库存预留、价格承诺或订单；完成预约与提交抢票是两个独立动作。开售前可以修改场次、票档、数量和观演人，任何修改都会使已完成版本失效并要求重新完成；观演人数必须严格等于购票数量。完成预约只冻结方案和观演人身份快照，不会创建订单请求或占用库存。开售后，用户仍需手动提交预约抢票，系统会重新校验开售窗口、票档和实时库存，因此不保证能买到票，也不保证价格不变。
+
+未在开售前完成预约或预约已过期的用户，开售后按普通抢票流程调用 `POST /api/orders/async`。若预约提交期间进入 `RECONCILIATION_REQUIRED`，表示请求与计划的关联结果尚待确认；不要盲目换幂等 Token 重试，应等待对账收敛并查询预约状态及对应 `requestId`。
+
+`POST /api/purchase-plans/{id}/confirm-spec` 是旧客户端兼容入口，语义等同于 `/complete`，新客户端应使用 `/complete`。
 
 后台接口位于 `/api/admin/**`：`USER` 无后台权限，`OPERATOR` 可执行查询和低风险运营操作，`ADMIN` 可执行库存调整、消息重试、死信处理和补偿等高风险操作。
 

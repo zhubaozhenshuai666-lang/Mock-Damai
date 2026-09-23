@@ -28,6 +28,8 @@ public class TicketOrderRequest {
 
     private Long ticketCategoryId;
 
+    private Long purchasePlanId;
+
     private Integer quantity;
 
     private String status;

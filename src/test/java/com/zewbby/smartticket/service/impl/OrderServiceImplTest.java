@@ -466,7 +466,9 @@ class OrderServiceImplTest {
 
         assertThatThrownBy(() -> orderService.submitAsyncOrder(validRequest()))
                 .isInstanceOf(BusinessException.class)
-                .hasMessageContaining(ErrorMessageConstant.STOCK_NOT_ENOUGH);
+                .hasMessageContaining(ErrorMessageConstant.STOCK_NOT_ENOUGH)
+                .satisfies(exception -> assertThat(exception.getClass().getSimpleName())
+                        .isEqualTo("AsyncOrderSubmissionRejectedException"));
 
         verify(orderRequestMapper, never()).insert(any());
         verify(orderRequestMapper, never()).markFailed(anyLong(), anyString());
@@ -479,7 +481,9 @@ class OrderServiceImplTest {
 
         assertThatThrownBy(() -> orderService.submitAsyncOrder(validRequest()))
                 .isInstanceOf(BusinessException.class)
-                .hasMessageContaining(ErrorMessageConstant.TICKET_SOLD_OUT);
+                .hasMessageContaining(ErrorMessageConstant.TICKET_SOLD_OUT)
+                .satisfies(exception -> assertThat(exception.getClass().getSimpleName())
+                        .isEqualTo("AsyncOrderSubmissionRejectedException"));
 
         verify(orderRequestMapper, never()).insert(any());
         verify(asyncOrderMessagePublisher, never()).publish(any());

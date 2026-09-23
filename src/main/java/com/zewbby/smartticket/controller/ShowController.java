@@ -5,11 +5,14 @@ import com.zewbby.smartticket.domain.vo.SessionVO;
 import com.zewbby.smartticket.domain.vo.ShowDetailVO;
 import com.zewbby.smartticket.domain.vo.ShowListVO;
 import com.zewbby.smartticket.domain.vo.TicketCategoryVO;
+import com.zewbby.smartticket.ratelimit.ClientIpResolver;
+import com.zewbby.smartticket.service.ArtistRankingService;
 import com.zewbby.smartticket.service.ShowService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import jakarta.servlet.http.HttpServletRequest;
 
 import java.util.List;
 
@@ -19,8 +22,16 @@ public class ShowController {
 
     private final ShowService showService;
 
-    public ShowController(ShowService showService) {
+    private final ArtistRankingService artistRankingService;
+
+    private final ClientIpResolver clientIpResolver;
+
+    public ShowController(ShowService showService,
+                          ArtistRankingService artistRankingService,
+                          ClientIpResolver clientIpResolver) {
         this.showService = showService;
+        this.artistRankingService = artistRankingService;
+        this.clientIpResolver = clientIpResolver;
     }
 
     /**
@@ -38,8 +49,11 @@ public class ShowController {
      * @return
      */
     @GetMapping("/shows/{id}")
-    public ApiResponse<ShowDetailVO> getShowDetail(@PathVariable Long id) {
-        return ApiResponse.success(showService.getShowDetail(id));
+    public ApiResponse<ShowDetailVO> getShowDetail(@PathVariable Long id,
+                                                   HttpServletRequest request) {
+        ShowDetailVO detail = showService.getShowDetail(id);
+        artistRankingService.recordDetailClick(detail.getArtist(), clientIpResolver.resolve(request));
+        return ApiResponse.success(detail);
     }
 
     /**
