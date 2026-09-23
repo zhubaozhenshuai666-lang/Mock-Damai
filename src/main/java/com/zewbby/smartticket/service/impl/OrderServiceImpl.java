@@ -15,11 +15,13 @@ import com.zewbby.smartticket.domain.dto.RedisStockDeductResponse;
 import com.zewbby.smartticket.domain.entity.PaymentFlowLog;
 import com.zewbby.smartticket.domain.entity.PaymentOrder;
 import com.zewbby.smartticket.domain.entity.TicketOrder;
+import com.zewbby.smartticket.domain.entity.TicketOrderAudience;
 import com.zewbby.smartticket.domain.entity.TicketOrderRequest;
 import com.zewbby.smartticket.domain.entity.TicketStock;
 import com.zewbby.smartticket.domain.entity.UserAccount;
 import com.zewbby.smartticket.domain.vo.OrderRequestVO;
 import com.zewbby.smartticket.domain.vo.OrderVO;
+import com.zewbby.smartticket.domain.vo.TicketOrderAudienceVO;
 import com.zewbby.smartticket.enums.CompensationStatusEnum;
 import com.zewbby.smartticket.enums.OrderRequestStatusEnum;
 import com.zewbby.smartticket.enums.OrderStatusEnum;
@@ -34,6 +36,7 @@ import com.zewbby.smartticket.mapper.OrderMapper;
 import com.zewbby.smartticket.mapper.OrderRequestMapper;
 import com.zewbby.smartticket.mapper.PaymentMapper;
 import com.zewbby.smartticket.mapper.TicketCategoryMapper;
+import com.zewbby.smartticket.mapper.TicketOrderAudienceMapper;
 import com.zewbby.smartticket.mapper.TicketStockBucketMapper;
 import com.zewbby.smartticket.mapper.TicketStockMapper;
 import com.zewbby.smartticket.mapper.UserMapper;
@@ -154,6 +157,9 @@ public class OrderServiceImpl implements OrderService {
 
     @Autowired(required = false)
     private ActivityIsolationService activityIsolationService;
+
+    @Autowired(required = false)
+    private TicketOrderAudienceMapper ticketOrderAudienceMapper;
 
     @Autowired
     public OrderServiceImpl(OrderMapper orderMapper,
@@ -1350,7 +1356,24 @@ public class OrderServiceImpl implements OrderService {
     private OrderVO toOrderVO(TicketOrder order) {
         OrderVO orderVO = new OrderVO();
         BeanUtils.copyProperties(order, orderVO);
+        orderVO.setAudiences(loadOrderAudienceSnapshots(order.getId()));
         return orderVO;
+    }
+    private List<TicketOrderAudienceVO> loadOrderAudienceSnapshots(Long orderId) {
+        if (ticketOrderAudienceMapper == null || orderId == null) {
+            return List.of();
+        }
+        List<TicketOrderAudience> snapshots = ticketOrderAudienceMapper.selectByOrderId(orderId);
+        if (snapshots == null || snapshots.isEmpty()) {
+            return List.of();
+        }
+        return snapshots.stream()
+                .map(snapshot -> new TicketOrderAudienceVO(
+                        snapshot.getLineNo(),
+                        snapshot.getAudienceId(),
+                        snapshot.getNameSnapshot(),
+                        snapshot.getIdNoHashSnapshot()))
+                .toList();
     }
 
     private OrderRequestVO toOrderRequestVO(TicketOrderRequest orderRequest) {

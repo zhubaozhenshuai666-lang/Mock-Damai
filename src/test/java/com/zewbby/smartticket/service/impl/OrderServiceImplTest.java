@@ -11,10 +11,12 @@ import com.zewbby.smartticket.domain.dto.CreateOrderRequest;
 import com.zewbby.smartticket.domain.dto.OrderSnapshot;
 import com.zewbby.smartticket.domain.dto.RedisStockDeductResponse;
 import com.zewbby.smartticket.domain.entity.TicketOrder;
+import com.zewbby.smartticket.domain.entity.TicketOrderAudience;
 import com.zewbby.smartticket.domain.entity.TicketOrderRequest;
 import com.zewbby.smartticket.domain.entity.TicketStock;
 import com.zewbby.smartticket.domain.entity.UserAccount;
 import com.zewbby.smartticket.domain.vo.OrderRequestVO;
+import com.zewbby.smartticket.domain.vo.TicketOrderAudienceVO;
 import com.zewbby.smartticket.enums.OrderRequestStatusEnum;
 import com.zewbby.smartticket.enums.OrderStatusEnum;
 import com.zewbby.smartticket.enums.RedisStockDeductResult;
@@ -24,6 +26,7 @@ import com.zewbby.smartticket.mapper.OrderMapper;
 import com.zewbby.smartticket.mapper.OrderRequestMapper;
 import com.zewbby.smartticket.mapper.PaymentMapper;
 import com.zewbby.smartticket.mapper.TicketCategoryMapper;
+import com.zewbby.smartticket.mapper.TicketOrderAudienceMapper;
 import com.zewbby.smartticket.mapper.TicketStockBucketMapper;
 import com.zewbby.smartticket.mapper.TicketStockMapper;
 import com.zewbby.smartticket.mapper.UserMapper;
@@ -93,6 +96,9 @@ class OrderServiceImplTest {
 
     @Mock
     private TicketStockBucketMapper ticketStockBucketMapper;
+
+    @Mock
+    private TicketOrderAudienceMapper ticketOrderAudienceMapper;
 
     @Mock
     private OrderSubmitGuard orderSubmitGuard;
@@ -700,6 +706,30 @@ class OrderServiceImplTest {
 
         assertThat(orders).hasSize(1);
         verify(orderMapper).selectByUserId(1L);
+    }
+
+    @Test
+    void currentUserCanQueryOwnOrderWithAudienceSnapshots() {
+        ReflectionTestUtils.setField(orderService, "ticketOrderAudienceMapper", ticketOrderAudienceMapper);
+        TicketOrder order = order(1L, OrderStatusEnum.PENDING_PAYMENT.getCode());
+        TicketOrderAudience first = new TicketOrderAudience(
+                11L, 1L, 1, 101L, "张三", "hash-1", LocalDateTime.now());
+        TicketOrderAudience second = new TicketOrderAudience(
+                12L, 1L, 2, 102L, "李四", "hash-2", LocalDateTime.now());
+        when(orderMapper.selectByIdAndUserId(1L, 1L)).thenReturn(order);
+        when(ticketOrderAudienceMapper.selectByOrderId(1L)).thenReturn(List.of(first, second));
+
+        var response = orderService.getOrderById(1L);
+
+        assertThat(response.getAudiences())
+                .extracting(TicketOrderAudienceVO::getLineNo,
+                        TicketOrderAudienceVO::getAudienceId,
+                        TicketOrderAudienceVO::getNameSnapshot,
+                        TicketOrderAudienceVO::getIdNoHashSnapshot)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(1, 101L, "张三", "hash-1"),
+                        org.assertj.core.groups.Tuple.tuple(2, 102L, "李四", "hash-2"));
+        verify(ticketOrderAudienceMapper).selectByOrderId(1L);
     }
 
     @Test
