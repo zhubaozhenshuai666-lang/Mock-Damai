@@ -296,7 +296,198 @@ Flash-sale profile 中与 Consumer、HikariCP、Stock Bucket 等相关的参数�
 - 关键业务 Counter
 - In-Flight Request
 
-## 8. 压力模型
+## 8. 起始 QPS 估算：Preflight Capacity Probe
+
+正式 Calibration Sweep 不使用任意固定的起始 QPS，例如 100 QPS。
+
+起始 QPS 必须由当前代码配置和一次短时预评估共同决定。
+
+### 8.1 静态容量结构
+
+当前 `flash-sale` profile 的关键并发配置：
+
+```text
+Hikari maximum-pool-size       = 80
+RocketMQ consume threads       = 48
+RocketMQ consume thread max    = 160
+Async batch workers            = 16
+Async batch size               = 64
+Async batch max wait           = 20 ms
+Stock buckets                  = 128
+```
+
+单热点票档不会天然退化成单 Worker。
+
+当前 routing key 包含：
+
+```text
+activityScope + bucketVersion + bucketNo
+```
+
+Stock Bucket 为 128，而本地 Batch Worker 为 16，因此热点票档的消息可以分散到多个本地消费 shard。
+
+这说明 100 QPS 明显低于当前并发结构值得测试的区域，但这些配置仍然不能直接推导真实 TPS，因为缺少：
+
+- Windows SUT 实际 CPU / Memory；
+- MySQL 实际事务耗时；
+- consumeBatch 实际 batch occupancy；
+- Redis Lua 延迟；
+- RocketMQ send / consume 延迟；
+- 单批事务内 SQL 锁等待。
+
+### 8.2 Preflight Probe 的目的
+
+Preflight 不是正式 Benchmark，不进入最终性能结论。
+
+它只回答：
+
+> 当前这台 SUT 大致在哪个数量级开始接近处理能力，从而决定正式 Baseline 从哪里开始。
+
+### 8.3 Probe 方法
+
+保持 Capacity Baseline 的配置：
+
+- Waiting Room OFF；
+- Rate Limit OFF；
+- Risk Control OFF；
+- Activity Isolation OFF；
+- In-Flight OFF；
+- Backpressure OFF；
+- `quantity=1`；
+- 单热点票档；
+- `POLL_RESULT=false`；
+- RocketMQ Transaction Message；
+- 单 Spring Boot 实例。
+
+然后临时取消 Submit QPS 限制，使用 closed-loop 短时探测。
+
+按线程阶梯：
+
+```text
+32 threads
+64 threads
+128 threads
+256 threads（仅前一档仍明显线性增长时）
+```
+
+每档：
+
+```text
+Warm-up: 20–30s
+Measure: 30–60s
+Run: 1 次
+```
+
+观察：
+
+- 实际 Submit TPS；
+- Order Creation TPS；
+- P95 / P99；
+- RocketMQ Accumulation；
+- Windows CPU；
+- MySQL CPU / Threads_running；
+- Hikari active / pending；
+- JVM CPU / GC。
+
+### 8.4 如何得到 Estimated Capacity
+
+定义：
+
+```text
+Q_probe_peak
+=
+Probe 中仍保持健康、且继续增加线程后吞吐提升开始显著变小的最高 Submit TPS
+```
+
+这里不把单纯的最高瞬时 TPS 当作容量。
+
+如果：
+
+```text
+64 threads  -> 2400 TPS
+128 threads -> 3600 TPS
+256 threads -> 3700 TPS
+```
+
+则大致可以认为容量数量级靠近：
+
+```text
+~3600–3700 TPS
+```
+
+而不是继续猜测 5000 或 10000。
+
+### 8.5 正式起始 QPS
+
+正式 Calibration Sweep 起始值：
+
+```text
+Q_start = round_practical(Q_probe_peak × 0.50)
+```
+
+即从预估容量约 50% 的位置开始。
+
+例如：
+
+```text
+Q_probe_peak ≈ 3600 TPS
+
+Q_start ≈ 1800 QPS
+```
+
+然后使用比例阶梯，而不是固定绝对阶梯：
+
+```text
+0.50 × Q_probe_peak
+0.70 × Q_probe_peak
+0.85 × Q_probe_peak
+1.00 × Q_probe_peak
+1.15 × Q_probe_peak
+```
+
+这样测试点天然围绕当前机器的真实容量边界。
+
+### 8.6 为什么不用静态公式直接算 TPS
+
+从配置可以得到并发结构，但不能得到服务时间。
+
+例如 Batch Worker 理论并发为 16，Batch Size 最大 64，但真实吞吐取决于：
+
+```text
+每个 batch 实际聚合多少条消息
+×
+每个 batch 数据库事务耗时
+×
+锁等待
+×
+MQ / Redis / CPU 开销
+```
+
+如果直接使用：
+
+```text
+16 × 64 / 20ms
+```
+
+之类的公式，会得到没有工程意义的理论上限，因为 `20ms` 只是 batch max-wait，并不是数据库事务服务时间。
+
+因此 Phase 1 使用：
+
+```text
+Static Architecture Assessment
+        +
+Short Preflight Probe
+        ↓
+Estimated Capacity
+        ↓
+Formal Starting QPS
+```
+
+而不是拍脑袋选择一个起点。
+
+---
+
+## 9. 压力模型
 
 第一版暂定使用阶梯式压力，而不是一上来冲极限。
 
@@ -315,7 +506,7 @@ Flash-sale profile 中与 Consumer、HikariCP、Stock Bucket 等相关的参数�
 
 每个 Stage 之间必须重置会影响下一轮结果的业务数据，避免库存、请求状态、Token 和缓存状态污染后续实验。
 
-## 9. 稳定吞吐的判定
+## 10. 稳定吞吐的判定
 
 不能简单把“JMeter 打出的最大 TPS”定义为系统吞吐。
 
@@ -332,7 +523,7 @@ Flash-sale profile 中与 Consumer、HikariCP、Stock Bucket 等相关的参数�
 - 数据库连接池没有长期 pending；
 - 重复执行同一档位，结果波动在可接受范围内。
 
-## 10. 每个档位至少重复 3 次
+## 11. 每个档位至少重复 3 次
 
 单次跑出来的结果不能直接进入最终 Benchmark。
 
@@ -345,7 +536,7 @@ Flash-sale profile 中与 Consumer、HikariCP、Stock Bucket 等相关的参数�
 
 只有结果可重复，才进入 Baseline Report。
 
-## 11. Phase 1 明确不做
+## 12. Phase 1 明确不做
 
 本阶段先不做：
 
@@ -361,7 +552,7 @@ Flash-sale profile 中与 Consumer、HikariCP、Stock Bucket 等相关的参数�
 
 这些内容必须建立在 Baseline 之后，否则没有可信的 Before / After。
 
-## 12. 决策记录与待确认事项
+## 13. 决策记录与待确认事项
 
 ### 已确认
 
@@ -384,15 +575,19 @@ Flash-sale profile 中与 Consumer、HikariCP、Stock Bucket 等相关的参数�
 
 详细见 [baseline-scenarios.md](baseline-scenarios.md)。
 
+### 已确认的起始 QPS 方法
+
+正式起始 QPS 不使用固定绝对值。先执行短时 Preflight Capacity Probe，得到 `Q_probe_peak`，再取约 50% 作为正式 Calibration Sweep 起点。
+
 ### 待确认
 
-1. 第一版压力阶梯；
-2. 单档持续时间与 Warm-up；
-3. THREADS 与 TARGET_QPS 的关系；
+1. Preflight Probe 的具体实现方式；
+2. 正式比例压力阶梯是否采用 50% / 70% / 85% / 100% / 115%；
+3. 单档持续时间与 Warm-up；
 4. Phase 1 指标采集使用 Actuator + 原生指标，还是直接引入 Prometheus 级采集；
 5. 稳定容量边界的具体判定阈值。
 
-## 13. 输出物
+## 14. 输出物
 
 Phase 1 完成后，本目录至少应新增：
 
