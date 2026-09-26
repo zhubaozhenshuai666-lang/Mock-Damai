@@ -123,7 +123,63 @@ MQ Lag = 0
 | Capacity Baseline | 核心交易链路能处理多少 |
 | Flash-Sale Baseline | 保护策略面对洪峰时是否正确工作 |
 
-## 5. 固定变量
+## 5. Capacity Baseline V1 配置决策
+
+Capacity Baseline 的目标是测量核心交易链路的处理能力，因此关闭会在入口提前截断流量的治理策略，但保留所有核心正确性机制。
+
+### 保留
+
+- JWT；
+- 一次性 Idempotency Token；
+- requestId 幂等；
+- Redis Lua 原子库存预扣；
+- Stock Bucket；
+- RocketMQ Transaction Message；
+- Consumer 幂等；
+- ticket_order_request 状态机；
+- MySQL 条件扣减库存；
+- 正式订单创建。
+
+### 关闭
+
+通过环境变量关闭：
+
+```bash
+SMART_TICKET_WAITING_ROOM_ENABLED=false
+SMART_TICKET_RATE_LIMIT_ENABLED=false
+SMART_TICKET_RISK_CONTROL_ENABLED=false
+SMART_TICKET_ACTIVITY_ISOLATION_ENABLED=false
+SMART_TICKET_ASYNC_ORDER_IN_FLIGHT_CONTROL_ENABLED=false
+SMART_TICKET_RATE_LIMIT_BACKPRESSURE_ENABLED=false
+```
+
+原因是这些模块会在核心交易链路真正达到瓶颈之前主动拒绝或削减流量，导致无法观察自然容量边界。
+
+Capacity Baseline 允许出现：
+
+```text
+Submit TPS > Order Creation TPS
+           ↓
+      RocketMQ Accumulation
+```
+
+只有这样才能判断核心链路在什么压力档位开始无法持续追平。
+
+### Profile
+
+继续使用当前高并发运行配置：
+
+```text
+SPRING_PROFILES_ACTIVE=local,flash-sale
+```
+
+Phase 1 不为了制造“优化空间”而退回弱配置，也不在测试过程中临时调参。
+
+Flash-sale profile 中与 Consumer、HikariCP、Stock Bucket 等相关的参数需要在第一轮正式测试前完整冻结并记录。
+
+---
+
+## 6. 固定变量
 
 正式 Baseline 开始后，以下变量必须记录且单轮测试中不能随意变化：
 
@@ -168,9 +224,9 @@ MQ Lag = 0
 - JMeter version
 - JMeter 是否与服务端同机
 
-## 6. 需要采集的指标
+## 7. 需要采集的指标
 
-### 6.1 HTTP / JMeter
+### 7.1 HTTP / JMeter
 
 必须记录：
 
@@ -182,7 +238,7 @@ MQ Lag = 0
 - P99
 - Max Latency
 
-### 6.2 Async Order
+### 7.2 Async Order
 
 必须单独计算：
 
@@ -194,7 +250,7 @@ MQ Lag = 0
 
 > HTTP 200 / code=0 只代表请求被系统接受，不代表订单已经创建。
 
-### 6.3 RocketMQ
+### 7.3 RocketMQ
 
 必须观察：
 
@@ -205,7 +261,7 @@ MQ Lag = 0
 - DLQ
 - 压测停止后 Lag 回落到 0 所需时间
 
-### 6.4 Redis
+### 7.4 Redis
 
 至少记录：
 
@@ -216,7 +272,7 @@ MQ Lag = 0
 - Lua 相关耗时（若当前可采集）
 - 库存最终一致性
 
-### 6.5 MySQL
+### 7.5 MySQL
 
 至少记录：
 
@@ -228,7 +284,7 @@ MQ Lag = 0
 - Row Lock / Lock Wait
 - HikariCP active / pending
 
-### 6.6 JVM / Application
+### 7.6 JVM / Application
 
 至少记录：
 
@@ -240,7 +296,7 @@ MQ Lag = 0
 - 关键业务 Counter
 - In-Flight Request
 
-## 7. 压力模型
+## 8. 压力模型
 
 第一版暂定使用阶梯式压力，而不是一上来冲极限。
 
@@ -259,7 +315,7 @@ MQ Lag = 0
 
 每个 Stage 之间必须重置会影响下一轮结果的业务数据，避免库存、请求状态、Token 和缓存状态污染后续实验。
 
-## 8. 稳定吞吐的判定
+## 9. 稳定吞吐的判定
 
 不能简单把“JMeter 打出的最大 TPS”定义为系统吞吐。
 
@@ -276,7 +332,7 @@ MQ Lag = 0
 - 数据库连接池没有长期 pending；
 - 重复执行同一档位，结果波动在可接受范围内。
 
-## 9. 每个档位至少重复 3 次
+## 10. 每个档位至少重复 3 次
 
 单次跑出来的结果不能直接进入最终 Benchmark。
 
@@ -289,7 +345,7 @@ MQ Lag = 0
 
 只有结果可重复，才进入 Baseline Report。
 
-## 10. Phase 1 明确不做
+## 11. Phase 1 明确不做
 
 本阶段先不做：
 
@@ -305,7 +361,7 @@ MQ Lag = 0
 
 这些内容必须建立在 Baseline 之后，否则没有可信的 Before / After。
 
-## 11. 决策记录与待确认事项
+## 12. 决策记录与待确认事项
 
 ### 已确认
 
@@ -320,14 +376,13 @@ MQ Lag = 0
 
 ### 待确认
 
-1. Capacity Baseline 如何处理 Waiting Room、Rate Limit、Risk Control、Backpressure、In-Flight Control；
-2. 每单固定购买 1 张还是 2 张；
-3. 初始库存和用户数据规模；
-4. 第一版压力阶梯；
-5. Baseline 是否先只测单个热点票档；
-6. Phase 1 指标采集使用 Actuator + 原生指标，还是直接引入 Prometheus 级采集。
+1. 每单固定购买 1 张还是 2 张；
+2. 初始库存和用户数据规模；
+3. 第一版压力阶梯；
+4. Baseline 是否先只测单个热点票档；
+5. Phase 1 指标采集使用 Actuator + 原生指标，还是直接引入 Prometheus 级采集。
 
-## 12. 输出物
+## 13. 输出物
 
 Phase 1 完成后，本目录至少应新增：
 
