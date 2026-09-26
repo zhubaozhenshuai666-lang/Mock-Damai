@@ -518,7 +518,7 @@ Mock-Damai
 │   ├── architecture
 │   ├── adr
 │   ├── api
-│   ├── performance
+│   ├── performance-engineering
 │   └── sql
 ├── scripts
 │   ├── jmeter
@@ -564,7 +564,7 @@ scripts/jmeter/
 scripts/load/
 ```
 
-正式压测方案见 [formal-jmeter-pressure-test-plan.md](docs/performance/formal-jmeter-pressure-test-plan.md)。
+当前性能工程阶段的测试口径、Baseline 设计和实验记录统一维护在 [docs/performance-engineering/](docs/performance-engineering/README.md)。
 
 重点关注：
 
@@ -720,7 +720,7 @@ Trade-off
 | [artist-ranking-design.md](docs/architecture/artist-ranking-design.md) | 搜索与热榜设计 |
 | [docs/adr](docs/adr) | Architecture Decision Records |
 | [docs/api](docs/api) | API 请求样例 |
-| [docs/performance](docs/performance) | 压测设计 |
+| [docs/performance-engineering](docs/performance-engineering) | 性能基线、瓶颈分析与可靠性验证 |
 | [docs/sql](docs/sql) | SQL 与数据库初始化 |
 | [CONTEXT.md](CONTEXT.md) | 领域语言与业务边界 |
 
