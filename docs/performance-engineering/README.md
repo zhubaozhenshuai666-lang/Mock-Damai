@@ -34,6 +34,7 @@
 ## 当前文档
 
 - [Phase 1 - Baseline](phase-1-baseline.md)
+- [Baseline Environment](baseline-environment.md)
 
 ## 压测资产
 
