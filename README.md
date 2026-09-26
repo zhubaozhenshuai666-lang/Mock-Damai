@@ -581,6 +581,136 @@ scripts/load/
 
 ---
 
+## 当前阶段：Performance Engineering
+
+当前项目的业务主链路已经基本完整，后续不再以继续堆叠“大麦业务功能”为主要目标。
+
+Mock-Damai 接下来的定位是：
+
+> **以票务抢购场景作为实验载体，系统性验证高并发、高可靠后端架构的性能边界、扩展能力与故障恢复能力。**
+
+当前阶段按以下顺序推进：
+
+### Phase 1 — Baseline
+
+在**不修改核心业务实现**的前提下建立正式性能基线。
+
+固定测试环境、数据规模和压测模型，分别记录：
+
+- Submit TPS：入口接收抢票请求的吞吐；
+- Order Creation TPS：异步消费者真正创建订单的吞吐；
+- P95 / P99 Latency；
+- Error Rate；
+- MQ Consumer Lag；
+- In-Flight Request；
+- Redis / MySQL CPU 与连接使用情况；
+- GC / JVM Thread 状态；
+- Oversell Count。
+
+重点不是追求一个孤立的高 TPS 数字，而是明确：
+
+```text
+系统可以接收多少请求
+↓
+下游每秒可以稳定处理多少订单
+↓
+积压从哪里开始出现
+↓
+第一个真实瓶颈是什么
+```
+
+### Phase 2 — Bottleneck Profiling
+
+基于 Baseline 对完整链路进行 Profiling，不预设瓶颈。
+
+重点观察：
+
+```text
+HTTP / Thread Pool
+Redis Lua
+Redis Hot Key
+RocketMQ Producer / Consumer
+Consumer Worker
+MySQL Connection Pool
+MySQL Row Lock
+Order Transaction
+JVM / GC
+```
+
+最终形成 Bottleneck Report，记录不同并发档位下真正限制吞吐的组件。
+
+### Phase 3 — Targeted Optimization
+
+只针对已经通过数据确认的瓶颈做优化，并保留完整 Before / After 对照。
+
+优先验证的实验包括：
+
+- Consumer Worker 数量调优；
+- 单条消费 vs Batch Consumer；
+- 单条写入 vs Batch Insert；
+- Stock Bucket 数量对 Redis 热点竞争的影响；
+- Backpressure 阈值与 MQ Lag 的关系；
+- MySQL 热点行与事务范围优化。
+
+每一次优化都需要记录：
+
+```text
+Problem
+↓
+Baseline
+↓
+Change
+↓
+Result
+↓
+Trade-off
+```
+
+### Phase 4 — Multi-Instance Validation
+
+从单实例扩展到至少两个应用实例，重点验证：
+
+- requestId 幂等是否仍成立；
+- Redis 库存是否仍然不超卖；
+- 是否存在依赖单机本地锁的逻辑；
+- 定时任务是否重复执行；
+- MQ 重复消费是否会重复创单；
+- 缓存与状态是否能够正确收敛。
+
+该阶段关注的是**横向扩展后的正确性**，而不是单机 TPS 数字。
+
+### Phase 5 — Failure Injection
+
+主动制造关键故障，验证系统能否恢复：
+
+- Redis 预扣后应用实例异常退出；
+- MQ 消费后数据库事务回滚；
+- 同一消息重复投递；
+- 支付成功回调重复到达；
+- Consumer 暂停后形成 MQ Lag，再恢复消费；
+- Redis 短暂不可用；
+- 补偿任务或对账任务重复执行。
+
+目标是验证事务消息、幂等、补偿、DLQ、巡检和对账机制是否真正有效，而不仅仅是代码中“存在这些设计”。
+
+### Phase 6 — Benchmark & Architecture Report
+
+最终产出可复现的实验报告，包括：
+
+- 测试环境；
+- 数据规模；
+- 压测模型；
+- Baseline；
+- 瓶颈定位过程；
+- 优化前后对比；
+- 多实例结果；
+- 故障恢复结果；
+- 已知边界与 Trade-off。
+
+在正式结果完成前，README 不使用未经验证的“10W QPS”“生产级吞吐”等宣传性数字。
+
+---
+
 ## 文档导航
 
 | 文档 | 内容 |
