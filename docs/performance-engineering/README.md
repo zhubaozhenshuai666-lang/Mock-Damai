@@ -35,6 +35,13 @@
 
 - [Phase 1 - Baseline](phase-1-baseline.md)
 
-## 历史压测资料
+## 压测资产
 
-现有 `docs/performance/` 和 `scripts/load/` 中已有 JMeter、洪峰压测和环境准备材料。这些内容不会删除，但本阶段会重新审查其假设，尤其是消息模式、指标采集方式和测试口径。
+旧版 `docs/performance/` 压测计划与报告已删除，避免与当前 RocketMQ 默认主链路和新的性能测试口径产生冲突。
+
+仍保留可执行资产：
+
+- `scripts/jmeter/`：JMeter 测试计划；
+- `scripts/load/`：数据准备、环境重置与压测执行脚本。
+
+这些脚本在 Phase 1 中会逐项审查、修正和重新标定，不能因为脚本“能跑”就直接把历史结果当作新的 Baseline。
