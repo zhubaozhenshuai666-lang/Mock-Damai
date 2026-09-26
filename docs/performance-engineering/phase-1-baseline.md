@@ -374,13 +374,23 @@ Flash-sale profile 中与 Consumer、HikariCP、Stock Bucket 等相关的参数�
 
 详细环境决策见 [baseline-environment.md](baseline-environment.md)。
 
+### 已确认的数据模型
+
+1. Capacity Baseline 固定 `quantity=1`；
+2. 第一轮只压一个热点 Ticket Category；
+3. 用户池按 `max(1000, THREADS × 4)` 准备；
+4. CSV Rows 按理论请求量预留 20%；
+5. 库存按 CSV Rows 再预留至少 10%，保证不因售罄提前结束。
+
+详细见 [baseline-scenarios.md](baseline-scenarios.md)。
+
 ### 待确认
 
-1. 每单固定购买 1 张还是 2 张；
-2. 初始库存和用户数据规模；
-3. 第一版压力阶梯；
-4. Baseline 是否先只测单个热点票档；
-5. Phase 1 指标采集使用 Actuator + 原生指标，还是直接引入 Prometheus 级采集。
+1. 第一版压力阶梯；
+2. 单档持续时间与 Warm-up；
+3. THREADS 与 TARGET_QPS 的关系；
+4. Phase 1 指标采集使用 Actuator + 原生指标，还是直接引入 Prometheus 级采集；
+5. 稳定容量边界的具体判定阈值。
 
 ## 13. 输出物
 
