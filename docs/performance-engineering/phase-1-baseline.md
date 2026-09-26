@@ -305,18 +305,27 @@ MQ Lag = 0
 
 这些内容必须建立在 Baseline 之后，否则没有可信的 Before / After。
 
-## 11. 当前待确认事项
+## 11. 决策记录与待确认事项
 
-在正式执行前，需要把下面几项讨论并锁定：
+### 已确认
 
-1. Baseline 的实际运行机器；
-2. JMeter 是否与服务端同机；
-3. Capacity Baseline 是否允许临时提高/关闭 Waiting Room、Rate Limit 等策略；
-4. 每单固定购买 1 张还是 2 张；
-5. 初始库存和用户数据规模；
-6. 第一版压力阶梯；
-7. Baseline 是否先只测单个热点票档；
-8. Phase 1 是否采集 Prometheus 级指标，还是先使用 Actuator + 系统命令 + MySQL/Redis/RocketMQ 原生指标。
+1. **正式 Baseline 使用两台物理机器。**
+   - MacBook Air M4：JMeter Load Generator；
+   - Windows：System Under Test。
+2. **JMeter 与服务端分离。** 同机测试只用于 Smoke Test，不进入正式 Benchmark。
+3. **Phase 1 只运行一个 Spring Boot 实例。** 多实例属于 Phase 4。
+4. MySQL、Redis、RocketMQ 暂时与 Spring Boot 同机，先建立当前单机部署形态的基线。
+
+详细环境决策见 [baseline-environment.md](baseline-environment.md)。
+
+### 待确认
+
+1. Capacity Baseline 如何处理 Waiting Room、Rate Limit、Risk Control、Backpressure、In-Flight Control；
+2. 每单固定购买 1 张还是 2 张；
+3. 初始库存和用户数据规模；
+4. 第一版压力阶梯；
+5. Baseline 是否先只测单个热点票档；
+6. Phase 1 指标采集使用 Actuator + 原生指标，还是直接引入 Prometheus 级采集。
 
 ## 12. 输出物
 
