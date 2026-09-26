@@ -1,101 +1,420 @@
-# SmartTicket Lite
+<div align="center">
 
-面向演出票务场景的 Spring Boot 单体服务。高并发购票主链路只走异步下单：入口完成资格校验和 Redis 库存预扣后返回 `requestId`，由消息消费者创建正式订单，再进入支付、取消和超时关闭流程。
+# 🎫 Mock-Damai
 
-> 当前默认消息实现为 RocketMQ 事务消息。Kafka、Redis Stream 和 Outbox 均保留为可切换实现，不能与默认链路混为一谈。
+### High-Concurrency Ticketing System
 
-## 技术栈
+面向演唱会、大型活动等热点售票场景设计的高并发票务系统。
 
-- Java 21、Spring Boot 3.5、Spring MVC、Spring AOP、MyBatis-Plus
-- MySQL 8、Redis、Caffeine
-- RocketMQ（默认）、Kafka、Redis Stream（可选）
-- Micrometer、Spring Boot Actuator、JUnit 5、Testcontainers、JMeter
+围绕抢票主链路实现 **流量削峰、库存防超卖、异步创单、事务消息、幂等控制、库存分桶、失败补偿与最终一致性**。
 
-## 主链路
+**Java 21 · Spring Boot 3.5 · MySQL 8 · Redis · RocketMQ · Kafka**
 
-```text
+![Java](https://img.shields.io/badge/Java-21-orange)
+![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5.13-brightgreen)
+![MySQL](https://img.shields.io/badge/MySQL-8.0-blue)
+![Redis](https://img.shields.io/badge/Redis-6%2B-red)
+![RocketMQ](https://img.shields.io/badge/RocketMQ-Default-blue)
+![Kafka](https://img.shields.io/badge/Kafka-Optional-black)
+
+</div>
+
+---
+
+## 项目简介
+
+Mock-Damai 是一个面向高并发票务场景的后端工程，项目内部服务名为 **SmartTicket Lite**。
+
+它不以普通 CRUD 为核心，而是重点模拟热门演唱会、体育赛事等开售瞬间，大量用户竞争有限库存时会遇到的典型问题：
+
+- 瞬时流量冲击；
+- 热点库存竞争；
+- 重复提交与幂等；
+- Redis、MySQL、MQ 之间的一致性；
+- 消息重复消费与失败恢复；
+- 支付、取消、超时关闭带来的库存回滚；
+- 下游消费能力不足时的背压与隔离。
+
+> Redis 负责入口削峰和快速库存判断，MySQL 条件更新负责最终库存事实。  
+> Redis 预扣成功不等于正式订单一定创建成功。
+
+---
+
+## 系统架构
+
+\`\`\`mermaid
+flowchart LR
+    U["User / Client"]
+
+    subgraph ENTRY["Application Entry Layer"]
+        API["API Gateway / Controllers"]
+        AUTH["Auth & JWT"]
+        RISK["Risk Control / Rate Limit"]
+        WAIT["Waiting Room / Activity Isolation"]
+    end
+
+    subgraph CORE["Core Transaction Layer"]
+        IDEM["Idempotency Guard"]
+        REDIS["Redis Lua Stock Pre-deduct"]
+        ORCH["Async Submit Orchestrator"]
+        MQ["RocketMQ Transaction Message"]
+        CONSUMER["Async Order Consumer"]
+    end
+
+    subgraph DOMAIN["Persistence & Domain Layer"]
+        MYSQL["MySQL"]
+        ORDER["Order Service"]
+        PAYMENT["Payment Service"]
+        TIMEOUT["Timeout Close"]
+        COMP["Compensation / Reconciliation"]
+    end
+
+    subgraph OPS["Observability & Ops"]
+        METRICS["Metrics / Actuator"]
+        ADMIN["Admin Ops"]
+        DLQ["Dead Letter Queue"]
+        JMETER["JMeter / Load Test"]
+    end
+
+    U --> API
+    API --> AUTH
+    AUTH --> RISK
+    RISK --> WAIT
+    WAIT --> IDEM
+    IDEM --> REDIS
+    REDIS --> ORCH
+    ORCH --> MQ
+    MQ --> CONSUMER
+    CONSUMER --> ORDER
+    ORDER --> MYSQL
+    ORDER --> PAYMENT
+    ORDER --> TIMEOUT
+    TIMEOUT --> COMP
+    COMP --> MYSQL
+    COMP --> REDIS
+
+    METRICS -.-> ORDER
+    METRICS -.-> CONSUMER
+    ADMIN -.-> ORDER
+    ADMIN -.-> COMP
+    MQ -.-> DLQ
+    JMETER -.-> API
+\`\`\`
+
+### 抢票主链路
+
+\`\`\`text
 JWT 鉴权
-  -> 获取一次性幂等 Token
-  -> 提交 POST /api/orders/async
-  -> 风控 / 防重复 / 限流 / 等待室 / 在途容量控制
-  -> Redis Lua 原子预扣（支持库存分桶）
-  -> RocketMQ 事务消息
-  -> 消费者幂等抢占请求处理权
-  -> MySQL 条件扣减库存 + 创建 ticket_order
-  -> 更新 ticket_order_request 为 SUCCESS
-  -> 创建支付单 / 模拟支付回调
-  -> 支付成功确认库存；取消或超时关闭释放库存
-```
+  ↓
+获取一次性幂等 Token
+  ↓
+POST /api/orders/async
+  ↓
+风险控制 / 防重复
+  ↓
+用户 / IP / 活动 / 票档多维限流
+  ↓
+等待室 / 在途容量控制
+  ↓
+Redis Lua 原子预扣
+  ↓
+RocketMQ 事务消息
+  ↓
+异步消费者幂等抢占
+  ↓
+MySQL 条件扣减库存
+  ↓
+创建正式订单
+  ↓
+支付成功 / 主动取消 / 超时关闭
+  ↓
+库存确认或补偿
+\`\`\`
 
-### 下单与创单
+\`requestId\` 贯穿一次抢票请求的完整生命周期，用于请求幂等、Redis 预扣记录、消息追踪、异步结果查询和失败补偿。
 
-1. 用户通过 `GET /api/orders/idempotency-token` 获取一次性下单 Token。
-2. `POST /api/orders/async` 从 JWT 上下文获取用户身份，依次执行风控、售罄快速失败、重复提交保护、用户/IP/活动/票档限流、活动降级、演出归属校验、在途容量控制与可选等待室校验。
-3. 服务使用 `requestId` 作为幂等键调用 Redis Lua 脚本，原子完成库存校验、预扣和预扣记录写入；库存分桶开启时仅在有限探测窗口内选择一个 bucket 扣减。
-4. 默认 RocketMQ 模式先发送半消息，再执行 Redis 预扣与事务标记写入；Broker 回查时根据预扣记录决定提交或回滚消息。
-5. 消费者通过请求状态机与 SQL 条件更新抢占处理权，过滤重复消息；在一个事务中执行 MySQL 条件扣库存、订单快照与正式订单落库、请求成功状态回写。
-6. 创单失败、业务拒绝或 `PROCESSING` 超时会记录失败原因；已预扣的 Redis 库存按 `requestId` 幂等补偿，并记录补偿状态和死信信息。
+---
 
-### 状态模型
+## 核心设计
 
-异步请求 `ticket_order_request`：
+### 1. Redis Lua 原子预扣
 
-```text
+抢票入口不会直接竞争 MySQL 热点库存行，而是先通过 Redis Lua 完成：
+
+\`\`\`text
+库存检查
++
+库存扣减
++
+requestId 去重
++
+预扣记录写入
+\`\`\`
+
+这些操作在 Redis 内原子执行，避免应用层先查询库存再扣减所产生的竞态条件。
+
+### 2. MySQL 最终防超卖
+
+Redis 库存只承担入口削峰和快速失败。
+
+消费者创建订单时仍使用类似以下条件更新：
+
+\`\`\`sql
+UPDATE ticket_stock
+SET available_stock = available_stock - ?
+WHERE id = ?
+  AND available_stock >= ?;
+\`\`\`
+
+只有更新成功才继续创建订单，因此即使 Redis 发生缓存重建或人工修复，MySQL 仍保留最后一道防超卖边界。
+
+### 3. 库存分桶
+
+单个热门票档会形成 Redis 热点 Key。
+
+项目支持将库存拆分为多个 Bucket，并通过有限探测窗口完成路由，降低单 Key 热点竞争。
+
+当前包含：
+
+- Bucket Version；
+- Active Probe；
+- Tail Bucket；
+- The Porter 跨版本库存迁移；
+- Lua CAS + Delta 修复。
+
+### 4. RocketMQ 事务消息
+
+默认异步下单使用 RocketMQ Transaction Message。
+
+核心目标是降低以下状态长期存在的概率：
+
+\`\`\`text
+Redis 已预扣
+但
+异步创单消息未可靠提交
+\`\`\`
+
+主流程：
+
+\`\`\`text
+发送 Half Message
+        ↓
+执行 Redis 预扣
+        ↓
+写入事务标记
+        ↓
+Commit / Rollback
+\`\`\`
+
+Broker 无法判断事务结果时，可根据本地预扣状态执行事务回查。
+
+### 5. 消费者幂等
+
+消息链路按至少一次投递思路设计，因此消费者不能假设一条消息只会收到一次。
+
+消费者首先尝试将请求状态从：
+
+\`\`\`text
+QUEUED -> PROCESSING
+\`\`\`
+
+只有成功抢占处理权的消费者继续创建正式订单，重复消息不会再次创建订单。
+
+### 6. 最终一致性与补偿
+
+Redis、MySQL 与 MQ 不存在天然单体事务，因此项目通过：
+
+\`\`\`text
+状态机
++
+事务消息
++
+幂等
++
+补偿
++
+巡检
++
+对账
+\`\`\`
+
+共同完成可恢复的最终一致性。
+
+例如：
+
+\`\`\`text
+Redis 已预扣
+↓
+消费者创建订单失败
+↓
+记录失败状态
+↓
+按 requestId 幂等补偿 Redis
+\`\`\`
+
+### 7. Backpressure 与活动隔离
+
+入口不会无限接收请求并把压力全部转移给 MQ。
+
+项目可结合：
+
+- In-Flight Request；
+- Local Message Backlog；
+- Consumer Capacity；
+- Activity Isolation；
+
+对高峰流量进行背压和热点活动隔离，避免单个活动拖垮整个服务。
+
+---
+
+## 状态模型
+
+### 异步抢票请求
+
+\`ticket_order_request\`
+
+\`\`\`text
 QUEUED -> PROCESSING -> SUCCESS
                      -> FAILED -> COMPENSATED
-```
+\`\`\`
 
-正式订单 `ticket_order`：
+### 正式订单
 
-```text
+\`ticket_order\`
+
+\`\`\`text
 PENDING_PAYMENT -> PAID
 PENDING_PAYMENT -> CANCELLED
 PENDING_PAYMENT -> CLOSED
-```
+\`\`\`
 
-Redis 预扣是入口侧资格控制，不是最终库存事实。消费者仍须用 `available_stock >= quantity` 的 MySQL 条件更新完成最终扣减，避免缓存重建或人工修复期间出现超卖。
+- \`PAID\`：支付成功；
+- \`CANCELLED\`：用户主动取消；
+- \`CLOSED\`：支付超时关闭。
+
+---
+
+## 开售前预约抢票
+
+项目支持用户在开售前提前配置：
+
+- 场次；
+- 票档；
+- 购买数量；
+- 实名观演人。
+
+形成 Purchase Plan 后：
+
+**不会提前占库存，也不会提前创建正式订单。**
+
+只有进入开售窗口后，用户主动提交预约方案，才会进入真实抢票链路。
+
+\`\`\`text
+创建预约
+↓
+选择场次 / 票档 / 数量
+↓
+选择实名观演人
+↓
+完成预约
+↓
+等待开售
+↓
+手动提交抢票
+↓
+生成 requestId
+↓
+进入异步抢票主链路
+\`\`\`
+
+详细领域语义见 [CONTEXT.md](CONTEXT.md)。
+
+架构决策见 [预约与抢票提交分离 ADR](docs/adr/0001-预约与抢票提交分离.md)。
+
+---
 
 ## 已实现能力
 
-- **下单保护**：JWT 身份识别、一次性幂等 Token、重复提交保护、风控、等待室、活动降级、在途容量与多维 Lua 令牌桶限流。
-- **库存控制**：Redis Lua 原子预扣、热点库存分桶、售罄快速失败、失败补偿、Redis/MySQL/在途预扣量一致性巡检，以及 Lua CAS + Delta 修复。
-- **消息处理**：RocketMQ 事务消息和顺序消费；支持 Kafka 分区消费、有限重试及 DLT，也支持 Redis Stream 和 Outbox 投递模式。
-- **可靠事件**：订单创建、支付成功和库存变更领域事件写入本地消息表，支持发送抢占、重试退避、确认超时和人工死信处理。
-- **支付与订单闭环**：支付单幂等创建、HMAC-SHA256 模拟回调验签、支付流水/回调审计、取消订单和延迟消息超时关闭。
-- **运营后台**：演出、场次、票档、库存预热与调整；ADMIN/OPERATOR 权限控制和高风险操作审计。
-- **可观测性**：Actuator 健康检查与指标、订单/请求业务 Counter、慢调用日志、MQ 消费追踪和后台指标汇总。
+| 能力 | 当前实现 |
+| --- | --- |
+| 身份认证 | JWT、登录失败保护、Token 黑名单 |
+| 幂等 | 一次性 Idempotency Token、requestId |
+| 风控 | 用户/IP 频控、Gateway 决策接入 |
+| 限流 | 用户、IP、接口、票档多维令牌桶 |
+| 流量治理 | Waiting Room、Activity Isolation、Backpressure |
+| 库存 | Redis Lua 预扣、库存分桶、售罄快速失败 |
+| 最终库存 | MySQL 条件扣减 |
+| 消息 | RocketMQ 事务消息、Kafka、Redis Stream、Outbox |
+| 消费可靠性 | 幂等抢占、有限重试、DLQ |
+| 一致性 | 补偿、巡检、对账、Lua CAS + Delta 修复 |
+| 支付 | 支付单、HMAC-SHA256 模拟回调验签 |
+| 订单闭环 | 支付、主动取消、超时关闭 |
+| 预约购票 | Purchase Plan、实名观演人、版本冻结与对账 |
+| 内容能力 | 演出搜索、艺人热榜 |
+| 运维 | ADMIN / OPERATOR、库存调整、消息重试、审计 |
+| 可观测性 | Actuator、Micrometer、业务指标、慢调用与消费追踪 |
+| 测试 | JUnit 5、Testcontainers、JMeter |
 
-## 默认配置
+---
 
-配置入口：[application.yml](src/main/resources/application.yml)。可通过环境变量覆盖全部关键配置。
+## 技术栈
 
-| 配置项 | 默认值 | 说明 |
+| 模块 | 技术 |
+| --- | --- |
+| Language | Java 21 |
+| Framework | Spring Boot 3.5.13 |
+| Web | Spring MVC |
+| ORM | MyBatis-Plus |
+| Database | MySQL 8 |
+| Distributed Cache | Redis |
+| Local Cache | Caffeine |
+| Default MQ | RocketMQ |
+| Optional MQ | Kafka |
+| Optional Queue | Redis Stream |
+| Reliable Message | Local Message / Outbox |
+| Observability | Micrometer / Spring Boot Actuator |
+| Testing | JUnit 5 / Testcontainers |
+| Load Test | JMeter |
+
+---
+
+## 消息模式
+
+| 场景 | 模式 | 说明 |
 | --- | --- | --- |
-| `server.port` | `8081` | HTTP 服务端口 |
-| `smart-ticket.async-order-submit.publisher-mode` | `rocketmq` | 异步创单投递模式 |
-| `smart-ticket.async-order-submit.rocket-mq-transaction-message-enabled` | `true` | RocketMQ 事务消息开关 |
-| `smart-ticket.order-timeout.publisher-mode` | `rocketmq` | 超时订单消息模式 |
-| `smart-ticket.stock-bucket.enabled` | `true` | Redis 库存分桶开关 |
-| `smart-ticket.waiting-room.enabled` | `false` | 等待室开关 |
-| `smart-ticket.rate-limit.enabled` | `true` | 下单限流开关 |
+| 异步创单 | \`rocketmq\`（默认） | 事务消息、顺序消费、事务回查 |
+| 异步创单 | \`kafka\` | 按业务键分区，支持 Retry / DLT |
+| 异步创单 | \`redis-stream\` | Consumer Group 消费 |
+| 异步创单 | \`outbox\` | 本地消息表 + 定时投递 |
+| 超时关闭 | \`rocketmq\`（默认） | 延迟消息 + 定时扫描兜底 |
+| 领域事件 | 本地消息表 | 订单、支付、库存事件可靠投递 |
 
-`application-flash-sale.yml` 提供抢票场景的覆盖配置，例如更高的库存桶数量、等待室和更严格的限流参数。
+切换消息模式前，需要同步准备对应中间件、Topic / Consumer Group 和监控配置。
 
-## 本地启动
+---
 
-### 1. 准备依赖
+## Quick Start
+
+### 1. 环境要求
 
 - JDK 21
 - Maven 3.9+
 - MySQL 8+
 - Redis 6+
-- RocketMQ NameServer 与 Broker（默认模式）
+- RocketMQ NameServer 与 Broker
 
-Kafka 仅在将异步创单或超时消息模式切换为 `kafka` 时需要启动。
+Kafka 仅在主动切换到 Kafka 模式时需要。
 
-### 2. 初始化数据库
+### 2. 克隆项目
 
-```bash
+\`\`\`bash
+git clone https://github.com/zhubaozhenshuai666-lang/Mock-Damai.git
+cd Mock-Damai
+\`\`\`
+
+### 3. 初始化数据库
+
+\`\`\`bash
 mysql -h 127.0.0.1 -P 3306 -u root -p -e '
 CREATE DATABASE IF NOT EXISTS smart_ticket_lite
   DEFAULT CHARACTER SET utf8mb4
@@ -103,123 +422,238 @@ CREATE DATABASE IF NOT EXISTS smart_ticket_lite
 
 mysql -h 127.0.0.1 -P 3306 -u root -p smart_ticket_lite < docs/sql/schema.sql
 mysql -h 127.0.0.1 -P 3306 -u root -p smart_ticket_lite < docs/sql/data.sql
-```
+\`\`\`
 
-如需补充索引，请先检查目标库现有索引，再执行 `docs/sql/performance-indexes.sql`。
+如需补充索引，请先检查目标库现有索引，再执行：
 
-### 3. 配置本地环境
+\`\`\`text
+docs/sql/performance-indexes.sql
+\`\`\`
 
-```bash
-cp src/main/resources/application-local.example.yml src/main/resources/application-local.yml
+### 4. 本地配置
 
+\`\`\`bash
+cp src/main/resources/application-local.example.yml \
+src/main/resources/application-local.yml
+\`\`\`
+
+设置本地环境变量：
+
+\`\`\`bash
 export SMART_TICKET_DB_PASSWORD='your-db-password'
 export SMART_TICKET_REDIS_PASSWORD=''
 export SMART_TICKET_JWT_SECRET='a-local-secret-with-at-least-32-bytes'
 export SMART_TICKET_ROCKETMQ_NAME_SERVER='localhost:9876'
-```
+\`\`\`
 
-`application-local.yml` 已被忽略，不应提交真实密码或密钥。
+真实密码和密钥不要提交到 Git。
 
-### 4. 启动服务
+### 5. 启动
 
-```bash
+\`\`\`bash
 mvn spring-boot:run
-```
+\`\`\`
+
+默认 HTTP 端口：
+
+\`\`\`text
+8081
+\`\`\`
 
 健康检查：
 
-```bash
+\`\`\`bash
 curl http://127.0.0.1:8081/actuator/health
-```
+\`\`\`
 
-## 核心接口
+---
 
-除注册、登录和 Actuator 外，用户接口需携带 `Authorization: Bearer <token>`。
+## 核心 API
 
-| 方法 | 路径 | 说明 |
+完整接口调试样例见 [docs/api/README.md](docs/api/README.md)。
+
+| Method | API | Description |
 | --- | --- | --- |
-| `POST` | `/api/auth/register` | 注册用户 |
-| `POST` | `/api/auth/login` | 登录并获取 JWT |
-| `POST` | `/api/auth/logout` | 当前 Token 退出登录 |
-| `GET` | `/api/shows` | 查询已发布演出 |
-| `GET` | `/api/shows/{id}` | 查询演出详情、场次和票档 |
-| `GET` | `/api/search/shows?keyword=` | 搜索演出，命中艺人计入搜索热度 |
-| `GET` | `/api/rankings/artists?period=hot` | 查询最近 24 小时艺人/乐队热榜 |
-| `GET` | `/api/rankings/artists?period=weekly` | 查询本周艺人/乐队热度榜 |
-| `POST` | `/api/audiences` | 创建实名观演人 |
-| `GET` | `/api/audiences` | 查询当前用户观演人 |
-| `POST` | `/api/purchase-plans` | 创建开售前填单预约（不占库存） |
-| `PUT` | `/api/purchase-plans/{id}/spec` | 开售前选择/修改场次、票档和数量 |
-| `PUT` | `/api/purchase-plans/{id}/audiences` | 开售前选择/修改观演人，人数必须等于购票数量 |
-| `POST` | `/api/purchase-plans/{id}/complete` | 开售前完成预约并冻结观演人身份快照 |
-| `POST` | `/api/purchase-plans/{id}/submit` | 开售后手动按已完成方案提交抢票，返回 `requestId` |
-| `GET` | `/api/purchase-plans/{id}` | 查询预约方案及状态 |
-| `GET` | `/api/purchase-plans?status=` | 查询当前用户预约计划 |
-| `POST` | `/api/purchase-plans/{id}/cancel` | 取消尚未创单的预约计划 |
-| `GET` | `/api/orders/idempotency-token` | 获取一次性下单 Token |
-| `POST` | `/api/orders/async` | 异步下单主入口，返回 `requestId` |
-| `GET` | `/api/order-requests/{requestId}` | 查询异步创单结果 |
-| `GET` | `/api/users/me/orders` | 查询当前用户订单 |
-| `POST` | `/api/payments/create` | 为当前用户订单创建支付单 |
-| `POST` | `/api/payments/mock-pay` | 本地模拟支付回调，需携带签名 |
-| `POST` | `/api/orders/{id}/cancel` | 取消当前用户待支付订单 |
+| \`POST\` | \`/api/auth/register\` | 用户注册 |
+| \`POST\` | \`/api/auth/login\` | 用户登录 |
+| \`GET\` | \`/api/shows\` | 查询已发布演出 |
+| \`GET\` | \`/api/search/shows?keyword=\` | 演出搜索 |
+| \`GET\` | \`/api/rankings/artists?period=hot\` | 艺人热榜 |
+| \`POST\` | \`/api/purchase-plans\` | 创建预约计划 |
+| \`POST\` | \`/api/purchase-plans/{id}/submit\` | 开售后提交预约抢票 |
+| \`GET\` | \`/api/orders/idempotency-token\` | 获取一次性幂等 Token |
+| \`POST\` | \`/api/orders/async\` | 异步抢票入口 |
+| \`GET\` | \`/api/order-requests/{requestId}\` | 查询异步创单结果 |
+| \`POST\` | \`/api/payments/create\` | 创建支付单 |
+| \`POST\` | \`/api/orders/{id}/cancel\` | 取消待支付订单 |
 
-`POST /api/orders` 和 `POST /api/orders/{id}/pay` 为已废弃的兼容入口，不属于抢票主链路。
+后台运营接口位于：
 
-预约计划在抢票请求成功创建正式订单后进入 `ORDER_CREATED`；此后支付、取消和超时关闭由正式订单状态管理，预约计划不镜像这些订单状态。
+\`\`\`text
+/api/admin/**
+\`\`\`
 
-预约计划只是开售前保存的填单方案，不是库存预留、价格承诺或订单；完成预约与提交抢票是两个独立动作。开售前可以修改场次、票档、数量和观演人，任何修改都会使已完成版本失效并要求重新完成；观演人数必须严格等于购票数量。完成预约只冻结方案和观演人身份快照，不会创建订单请求或占用库存。开售后，用户仍需手动提交预约抢票，系统会重新校验开售窗口、票档和实时库存，因此不保证能买到票，也不保证价格不变。
+---
 
-未在开售前完成预约或预约已过期的用户，开售后按普通抢票流程调用 `POST /api/orders/async`。若预约提交期间进入 `RECONCILIATION_REQUIRED`，表示请求与计划的关联结果尚待确认；不要盲目换幂等 Token 重试，应等待对账收敛并查询预约状态及对应 `requestId`。
+## 项目结构
 
-`POST /api/purchase-plans/{id}/confirm-spec` 是旧客户端兼容入口，语义等同于 `/complete`，新客户端应使用 `/complete`。
+\`\`\`text
+Mock-Damai
+├── src
+│   ├── main
+│   │   ├── java/com/zewbby/smartticket
+│   │   │   ├── controller
+│   │   │   ├── service
+│   │   │   ├── mq
+│   │   │   ├── mapper
+│   │   │   ├── config
+│   │   │   ├── auth
+│   │   │   └── ratelimit
+│   │   └── resources
+│   │       ├── mapper
+│   │       ├── lua
+│   │       └── application.yml
+│   └── test
+├── docs
+│   ├── architecture
+│   ├── adr
+│   ├── api
+│   ├── performance
+│   └── sql
+├── scripts
+│   ├── jmeter
+│   └── load
+├── CONTEXT.md
+├── AGENTS.md
+└── pom.xml
+\`\`\`
 
-后台接口位于 `/api/admin/**`：`USER` 无后台权限，`OPERATOR` 可执行查询和低风险运营操作，`ADMIN` 可执行库存调整、消息重试、死信处理和补偿等高风险操作。
+---
 
-接口请求示例位于 [docs/api](docs/api)。
+## 测试与压测
 
-## 消息模式
+运行测试：
 
-| 场景 | 模式 | 说明 |
-| --- | --- | --- |
-| 异步创单 | `rocketmq`（默认） | RocketMQ 事务消息、顺序消费与事务回查 |
-| 异步创单 | `kafka` | 按业务键分区，支持有限重试和 DLT |
-| 异步创单 | `redis-stream` | Consumer Group 轮询与确认消费 |
-| 异步创单 | `outbox` | 本地消息表记录待发送指令，由定时任务投递 Kafka |
-| 超时关闭 | `rocketmq`（默认） | 延迟消息关闭未支付订单；定时任务兜底扫描 |
-| 领域事件 | 本地消息表 | 订单、支付和库存事件可靠投递 Kafka |
-
-切换模式前应同时准备对应中间件、Topic/Consumer Group 配置和监控，不应只修改单个环境变量。
-
-## 验证与压测
-
-```bash
+\`\`\`bash
 mvn test
-```
+\`\`\`
 
-项目包含单元测试、集成测试、Mapper SQL 契约测试和 JMeter 异步下单脚本。测试分类和依赖见 [src/test/README.md](src/test/README.md)。JMeter 脚本位于 `scripts/jmeter/`，运行及环境准备脚本位于 `scripts/load/`，正式压测计划见 [docs/performance/formal-jmeter-pressure-test-plan.md](docs/performance/formal-jmeter-pressure-test-plan.md)。完整文档入口见 [docs/README.md](docs/README.md)，接口样例分类见 [docs/api/README.md](docs/api/README.md)。
+项目包含：
 
-本地压测报告由脚本生成到 `reports/`，用于验证链路和记录本机测试，不代表生产环境容量；在未完成独立压测机、多实例应用、Redis/MySQL/Kafka 或 RocketMQ 集群验证前，不应将其表述为生产吞吐结论。
+- 单元测试；
+- MockMvc / Controller 测试；
+- Service 测试；
+- Mapper SQL 契约测试；
+- MySQL / Redis 集成测试；
+- MQ 相关测试；
+- Testcontainers。
 
-## 目录说明
+测试说明见 [src/test/README.md](src/test/README.md)。
 
-```text
-src/main/java/.../controller   HTTP 与后台管理入口
-src/main/java/.../service      下单、库存、支付、缓存和治理服务
-src/main/java/.../mq           消息生产、消费、重试与批量调度
-src/main/resources/lua         Redis 库存、补偿、限流与幂等脚本
-src/main/resources/mapper      MyBatis SQL 映射
-docs/README.md                 文档总入口和保留规则
-docs/architecture              系统流程和领域设计
-docs/adr                       架构决策记录
-docs/sql                       建表、初始化数据和索引脚本
-docs/api                       HTTP 接口示例（含当前/历史分类）
-docs/performance               JMeter 指南、计划和报告模板
-scripts/load                   压测数据和环境准备脚本
-```
+### JMeter
 
-## 边界说明
+JMeter 脚本位于：
 
-- `mock-pay` 是本地模拟支付回调，不接入真实第三方支付 SDK。
-- Redis 预扣用于削峰和快速失败，MySQL 条件扣减才是正式订单的库存事实。
-- 事务消息、补偿、巡检解决的是可恢复的一致性问题，不等同于跨 Redis、MySQL 和 MQ 的严格分布式强一致。
+\`\`\`text
+scripts/jmeter/
+\`\`\`
+
+环境与运行辅助脚本位于：
+
+\`\`\`text
+scripts/load/
+\`\`\`
+
+正式压测方案见 [formal-jmeter-pressure-test-plan.md](docs/performance/formal-jmeter-pressure-test-plan.md)。
+
+重点关注：
+
+- TPS；
+- P95 / P99 Latency；
+- Error Rate；
+- Redis / MySQL 库存一致性；
+- MQ Backlog；
+- In-Flight Request；
+- Oversell Count。
+
+> 本地压测结果仅用于开发阶段验证。  
+> 在未完成独立压测机、多实例应用以及 Redis / MySQL / MQ 集群环境验证前，不将本机数据表述为生产容量结论。
+
+---
+
+## 文档导航
+
+| 文档 | 内容 |
+| --- | --- |
+| [docs/README.md](docs/README.md) | 文档总入口 |
+| [system-flow-reading-guide.md](docs/architecture/system-flow-reading-guide.md) | 系统主链路源码阅读 |
+| [artist-ranking-design.md](docs/architecture/artist-ranking-design.md) | 搜索与热榜设计 |
+| [docs/adr](docs/adr) | Architecture Decision Records |
+| [docs/api](docs/api) | API 请求样例 |
+| [docs/performance](docs/performance) | 压测设计 |
+| [docs/sql](docs/sql) | SQL 与数据库初始化 |
+| [CONTEXT.md](CONTEXT.md) | 领域语言与业务边界 |
+
+---
+
+## Roadmap
+
+### 已完成
+
+- [x] JWT 用户认证
+- [x] 一次性幂等 Token
+- [x] 多维限流与风控
+- [x] Waiting Room
+- [x] Activity Isolation
+- [x] Redis Lua 原子库存预扣
+- [x] 库存分桶与 The Porter
+- [x] RocketMQ 事务消息
+- [x] Kafka / Redis Stream / Outbox 可切换消息模式
+- [x] 消费者幂等与 DLQ
+- [x] 库存补偿、一致性巡检与对账
+- [x] 支付、取消、超时关闭
+- [x] 预约抢票与实名观演人
+- [x] 演出搜索与艺人热榜
+- [x] Actuator / Micrometer
+- [x] JMeter 压测脚本
+
+### 后续验证方向
+
+- [ ] 多实例应用部署
+- [ ] Redis Cluster
+- [ ] RocketMQ / Kafka 集群
+- [ ] MySQL 主从与读写分离
+- [ ] Gateway 层统一风控与限流
+- [ ] Prometheus + Grafana
+- [ ] OpenTelemetry 全链路追踪
+- [ ] 独立压测环境
+- [ ] 多实例正式容量测试
+- [ ] 故障注入与恢复测试
+
+---
+
+## 设计边界
+
+1. \`mock-pay\` 为本地模拟支付，不接入真实第三方支付 SDK。
+2. Redis 预扣负责削峰与快速失败，MySQL 条件扣减才是正式库存事实。
+3. RocketMQ 事务消息、补偿、巡检和对账解决的是可恢复的最终一致性问题，不代表 Redis、MySQL 与 MQ 之间存在严格 ACID 分布式事务。
+4. 本地 JMeter 测试数据不能直接代表生产容量。
+5. 项目当前主要用于高并发票务系统架构学习、工程实践和性能验证。
+
+---
+
+## License
+
+当前仓库暂未声明正式开源许可证。
+
+如果后续作为公开作品长期维护，建议在明确代码开放范围后补充独立的 \`LICENSE\` 文件。
+
+---
+
+<div align="center">
+
+**Mock-Damai**
+
+Building a reliable ticketing system under high concurrency.
+
+</div>
